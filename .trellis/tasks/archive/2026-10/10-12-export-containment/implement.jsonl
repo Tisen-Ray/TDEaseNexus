@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/10-12-export-containment/design.md", "reason": "binding: deny/exempt sets, three call sites, iframe policy owner, threat-model note"}
+{"file": ".trellis/tasks/10-12-export-containment/implement.md", "reason": "ordered checklist + targeted validation"}
+{"file": "docs/design/FRONTEND-INTERACTION-MAP.md", "reason": "§2.8 export section to document the sandbox policy owner"}

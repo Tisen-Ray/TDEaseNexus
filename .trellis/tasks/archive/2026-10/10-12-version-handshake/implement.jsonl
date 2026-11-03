@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/10-12-version-handshake/design.md", "reason": "binding: version constant, /ready field, compat range, compat matrix"}
+{"file": ".trellis/tasks/10-12-version-handshake/implement.md", "reason": "ordered checklist (submodule first) + validation"}
+{"file": "docs/spec/FAILURE-CONTRACT.md", "reason": "environment-domain error semantics the fail-closed verdict must match"}
+{"file": "CHANGELOG.md", "reason": "version conventions and release cadence the compat range must respect"}

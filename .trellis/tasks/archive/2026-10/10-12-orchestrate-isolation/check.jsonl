@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/10-12-orchestrate-isolation/prd.md", "reason": "acceptance criteria to verify"}
+{"file": ".trellis/tasks/10-12-orchestrate-isolation/design.md", "reason": "verify implementation matches the realm contract"}
+{"file": "TDEase-FrontEnd/electron/agent/ptc-runtime.ts", "reason": "reference realm: verify orchestrate realm matches its bootstrap/defense pattern"}
+{"file": "docs/design/ORCHESTRATE-RUNTIME.md", "reason": "verify D1 rewritten consistently with the implementation"}

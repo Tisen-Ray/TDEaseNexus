@@ -1,0 +1,6 @@
+{"file": "docs/STATUS.md", "reason": "current status snapshot being reconciled"}
+{"file": "docs/README.md", "reason": "authority order and doc format rules"}
+{"file": "docs/spec/WORKFLOW-RUN.md", "reason": "backend engine contract under audit"}
+{"file": "docs/spec/AGENT-CONTRACT.md", "reason": "agent surface contract under audit"}
+{"file": "docs/spec/AGENT-EVENTS.md", "reason": "event vocabulary under audit"}
+{"file": "docs/design/FRONTEND-INTERACTION-MAP.md", "reason": "frontend feature description under audit"}

@@ -1,0 +1,5 @@
+{"file": "docs/STATUS.md", "reason": "verify settings defect resolved with ruling recorded; no other open-defect text disturbed"}
+{"file": "docs/design/FRONTEND-INTERACTION-MAP.md", "reason": "verify no stale settings-document claims remain (rail row, §7.6/§7.7, kinds list)"}
+{"file": "TDEase-FrontEnd/src/components/workbench/CommandPalette.test.ts", "reason": "rewritten settings assertions match the modal contract, not the old document contract"}
+{"file": "TDEase-FrontEnd/src/components/workbench/DocumentHost.test.ts", "reason": "rewritten settings dispatch test exercises the retained kind via setActiveKey"}
+{"file": ".trellis/tasks/10-12-settings-red-tests/prd.md", "reason": "acceptance criteria: 0 failed vitest, diff limited to 2 tests + 2 docs, no production source"}

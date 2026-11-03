@@ -1,0 +1,6 @@
+{"file": "docs/STATUS.md", "reason": "open-defect entry to resolve (§Open defects 2026-10-12 settings entry) + §Frontend wording + baseline"}
+{"file": "docs/design/FRONTEND-INTERACTION-MAP.md", "reason": "stale settings-document passages to correct: rail row ~L48, palette sections ~L695, registered kinds ~L646, §7.7"}
+{"file": "TDEase-FrontEnd/src/stores/documents.ts", "reason": "authoritative modal contract: openSettings/settingsModalOpen/requestedSettingsSection + retained-definition rationale comment"}
+{"file": "TDEase-FrontEnd/src/stores/palette.ts", "reason": "palette settings entries dispatch openSettings(undefined, item.settingsSection) (~L593)"}
+{"file": "TDEase-FrontEnd/src/components/settings/SettingsModal.vue", "reason": "modal host binding settingsModalOpen — the surface the rewritten palette assertions target"}
+{"file": "TDEase-FrontEnd/src/components/documents/definitions.ts", "reason": "retained settings document definition (legacy tabs) — what the rewritten DocumentHost test exercises"}

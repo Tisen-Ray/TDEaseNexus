@@ -1,0 +1,4 @@
+{"file": "docs/STATUS.md", "reason": "the two open items this task closes (node-catalog seed source; ownership absorbs _template) + version snapshot context"}
+{"file": ".trellis/tasks/10-12-seed-provenance/design.md", "reason": "binding contracts: manifest schemas v1/v2, pack script behavior, ownership classification table, migration rules"}
+{"file": ".trellis/tasks/10-12-seed-provenance/implement.md", "reason": "ordered checklist + validation commands + rollback points"}
+{"file": ".gitignore", "reason": "L8-45: what the nodes definition layer tracks — the constraint that shapes the manifest design"}

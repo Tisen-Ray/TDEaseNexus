@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/10-12-orchestrate-isolation/design.md", "reason": "realm contract: sandbox shape, bridges vs snapshots, cross-realm errors, no-timeout rationale"}
+{"file": ".trellis/tasks/10-12-orchestrate-isolation/implement.md", "reason": "ordered checklist + targeted validation"}
+{"file": "docs/spec/AGENT-CONTRACT.md", "reason": "the credential-denial contract being restored (§5.1 env construction, mode-independent denials)"}
+{"file": "docs/design/PTC-RUNTIME.md", "reason": "the vm realm pattern (D7) being replicated"}
+{"file": "docs/design/ORCHESTRATE-RUNTIME.md", "reason": "D1 'No vm sandbox' decision to rewrite"}

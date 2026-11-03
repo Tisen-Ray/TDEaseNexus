@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/10-12-seed-provenance/prd.md", "reason": "acceptance criteria to verify item by item"}
+{"file": ".trellis/tasks/10-12-seed-provenance/design.md", "reason": "verify implementation matches the binding contracts (schemas, classification, migration)"}
+{"file": "docs/STATUS.md", "reason": "verify both open items closed with the decision recorded"}
+{"file": "TDEase-FrontEnd/electron/main.ts", "reason": "verify provisionNodeCatalogSeed call site untouched and requiredEntries contract intact"}

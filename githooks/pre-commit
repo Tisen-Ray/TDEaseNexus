@@ -1,0 +1,21 @@
+#!/bin/sh
+# Zero-dependency staged-file gate: node --check for JS, eslint (if present)
+# for the frontend tree. Kept dependency-free on purpose (AGENTS.md).
+staged_js=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.m?js$' || true)
+[ -z "$staged_js" ] && exit 0
+fail=0
+for f in $staged_js; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    TDEase-FrontEnd/*)
+      (cd TDEase-FrontEnd && npx --no-install eslint -- "../$f" >/dev/null 2>&1) || {
+        echo "pre-commit: eslint failed: $f (run 'pnpm run lint' in TDEase-FrontEnd)" >&2
+        fail=1
+      }
+      ;;
+    *)
+      node --check "$f" 2>/dev/null || { echo "pre-commit: node --check failed: $f" >&2; fail=1; }
+      ;;
+  esac
+done
+exit $fail

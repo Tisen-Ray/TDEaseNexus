@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/10-12-bootstrap-secret-channel/design.md", "reason": "binding: channel order, compat matrix, EPIPE handling, where the secret lives after read"}
+{"file": ".trellis/tasks/10-12-bootstrap-secret-channel/implement.md", "reason": "ordered checklist (submodule first) + validation"}
+{"file": "docs/design/THREE-REPOSITORY-ARCHITECTURE.md", "reason": "§6 the secret-channel contract this task implements"}
+{"file": "TDEase-FrontEnd/electron/backend_manager.cjs", "reason": "spawn/env/exchange chain being modified"}
