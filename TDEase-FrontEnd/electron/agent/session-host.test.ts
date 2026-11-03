@@ -25,6 +25,10 @@ interface Harness {
 
 function makeHarness(options: {
   settledEvents?: ActEvent[]
+  /** F1 test seam: return true to make the store reject one appendEvent. */
+  failAppendEvent?: (event: EventInput) => boolean
+  /** F12 test seam: session ids the store reports as having a transcript. */
+  transcriptIds?: string[]
 } = {}): Harness {
   const appended: EventInput[] = []
   const turnCards: TurnCard[] = []
@@ -48,12 +52,14 @@ function makeHarness(options: {
     providers: {} as never,
     store: {
       appendEvent: async (_sessionId: string, event: EventInput) => {
+        if (options.failAppendEvent?.(event)) throw new Error('transient append failure')
         appended.push(event)
         return { ...event, seq: appended.length } as never
       },
       readTurnCards: async () => turnCards,
       appendTurnCard: async (_sessionId: string, card: TurnCard) => { turnCards.push(card) },
       writeSnapshot: async () => undefined,
+      hasTranscript: (sessionId: string) => options.transcriptIds?.includes(sessionId) ?? false,
     } as never,
     prompt: {
       resolveReferences: async () => [],
@@ -467,5 +473,43 @@ describe('SessionHost turn cards', () => {
 
     expect(result.outcome).toBe('resolved')
     expect(turnCards).toHaveLength(0)
+  })
+})
+
+describe('SessionHost append-track recovery (F1)', () => {
+  it('fails the turn on a transient append failure but re-arms the queue for the next turn', async () => {
+    let failedOnce = false
+    const { host, appended } = makeHarness({
+      failAppendEvent: (event) => {
+        if (event.type === 'turn.started' && !failedOnce) {
+          failedOnce = true
+          return true
+        }
+        return false
+      },
+    })
+    installSession(host, {
+      messages: [{ role: 'assistant', stopReason: 'stop' }],
+      prompt: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+    })
+
+    // Turn 1: the append failure is loud — the turn fails with it.
+    await expect(host.prompt('first', 'analysis')).rejects.toThrow('transient append failure')
+
+    // Turn 2: the queue is NOT poisoned — events append again (the pre-fix
+    // behavior skipped every append for the rest of the binding's life).
+    const result = await host.prompt('second', 'analysis')
+    expect(result.outcome).toBe('resolved')
+    expect(appended.some((event) => event.type === 'turn.started')).toBe(true)
+    expect(appended.at(-1)).toMatchObject({ type: 'turn.completed', outcome: 'resolved' })
+  })
+})
+
+describe('SessionHost fork (F12)', () => {
+  it('refuses a fork onto a target that already has a transcript', async () => {
+    const { host } = makeHarness({ transcriptIds: ['occupied'] })
+    installSession(host, { messages: [], sessionManager: {} })
+    await expect(host.fork('occupied')).rejects.toThrow(/already has a transcript/)
   })
 })

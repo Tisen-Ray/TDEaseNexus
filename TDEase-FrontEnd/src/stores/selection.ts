@@ -198,9 +198,15 @@ export const useSelectionStore = defineStore('selection', () => {
    * the reactive slot; it no longer owns the comparison.
    */
   async function refreshRunFileStatuses(id: string) {
+    // Stale-response guard, mirroring backendConnection's targetEpoch: capture
+    // the requested run at entry and bail before every state write unless the
+    // store still has that run selected — a slow chain for a previous Run (or
+    // a previous Workspace, which clears runId) must not overwrite the fresh
+    // statuses of the current one.
+    const stale = () => runId.value !== id
     const workspaceRoot = workspaceStore.workspacePath
     if (!workspaceRoot || !id) {
-      runFileStatuses.value = new Map()
+      if (!stale()) runFileStatuses.value = new Map()
       return
     }
 
@@ -227,7 +233,7 @@ export const useSelectionStore = defineStore('selection', () => {
       } catch { /* status failure is handled as an empty projection below */ }
     }
     if (!directory) {
-      runFileStatuses.value = new Map()
+      if (!stale()) runFileStatuses.value = new Map()
       return
     }
     directory = runResultsDir(directory)
@@ -238,16 +244,16 @@ export const useSelectionStore = defineStore('selection', () => {
     if (bridge) {
       try {
         if (!(await bridge.exists(workspaceRoot, `${directory}/run.json`))) {
-          runFileStatuses.value = new Map()
+          if (!stale()) runFileStatuses.value = new Map()
           return
         }
       } catch {
-        runFileStatuses.value = new Map()
+        if (!stale()) runFileStatuses.value = new Map()
         return
       }
     }
 
-    runFileStatuses.value = await probeRunFileStatuses(id, directory, {
+    const statuses = await probeRunFileStatuses(id, directory, {
       listRunFiles: (runId) => getTDEaseClient().listRunFiles(runId),
       localDigest: async (path) => {
         if (!bridge) return undefined
@@ -263,6 +269,7 @@ export const useSelectionStore = defineStore('selection', () => {
         return !!siblings?.some((node) => `${directory}/${node.name}` === path)
       },
     })
+    if (!stale()) runFileStatuses.value = statuses
   }
 
   watch(runId, (next) => {

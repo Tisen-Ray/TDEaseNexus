@@ -81,6 +81,10 @@ def _tdease_ms_bin_env():
     runtime convention since native.py dropped env/checkout fallbacks), so
     the binary's directory is prepended to PATH as well. Fallback order for
     locating a build: the repo's debug then release target."""
+    saved = {
+        "TDEASENEXUS_TOOLBOX_BIN": os.environ.get("TDEASENEXUS_TOOLBOX_BIN"),
+        "PATH": os.environ.get("PATH"),
+    }
     if not os.environ.get("TDEASENEXUS_TOOLBOX_BIN"):
         found = _default_ms_bin()
         if found:
@@ -91,6 +95,13 @@ def _tdease_ms_bin_env():
         if bin_dir and bin_dir not in os.environ.get("PATH", "").split(os.pathsep):
             os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
     yield
+    # Restore: a leaked PATH prepend contaminates every later test and the
+    # developer's own shell assumptions about the environment.
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 @pytest.hookimpl(hookwrapper=True)

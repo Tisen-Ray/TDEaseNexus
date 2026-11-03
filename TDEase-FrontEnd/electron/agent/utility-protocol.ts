@@ -167,6 +167,37 @@ export interface ClampResult<T> {
 
 const TRUNCATION_MARKER = '\n…[truncated by agent utility relay]'
 
+/** In-band tombstone appended when an array/object tail is dropped mid-walk. */
+export const RELAY_TRUNCATED_MARKER = { __relayTruncated: true } as const
+
+/**
+ * Detect any relay clamp tombstone (wholesale `__relayDropped` or in-band
+ * `__relayTruncated`) inside a received payload. Receivers call this before
+ * dispatching request/response/call data so a clamped message is rejected as
+ * corrupt instead of silently acting on a shortened copy (failure scenario: a
+ * 16 MB prompt clamped at the cap used to reach the child as a truncated
+ * string with no way for either side to tell).
+ */
+export function findRelayClampMarker(value: unknown, depth = 0): '__relayDropped' | '__relayTruncated' | null {
+  if (depth > 8 || value === null || typeof value !== 'object') return null
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findRelayClampMarker(entry, depth + 1)
+      if (found) return found
+    }
+    return null
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype) return null
+  const record = value as Record<string, unknown>
+  if (record.__relayDropped === true) return '__relayDropped'
+  if (record.__relayTruncated === true) return '__relayTruncated'
+  for (const key of Object.keys(record)) {
+    const found = findRelayClampMarker(record[key], depth + 1)
+    if (found) return found
+  }
+  return null
+}
+
 /**
  * Deep-clamp a relay payload so no single message can OOM the peer: strings
  * over stringCapBytes are sliced with a marker, and collection entries stop
@@ -212,7 +243,10 @@ export function clampForRelay<T>(value: T, options: ClampOptions = {}): ClampRes
       budget -= 16
       for (const entry of node) {
         if (budget <= 0) {
+          // In-band marker: the receiver must be able to SEE that the tail was
+          // dropped instead of silently dispatching a shortened array.
           truncated = true
+          out.push(RELAY_TRUNCATED_MARKER)
           break
         }
         out.push(walk(entry))
@@ -230,7 +264,9 @@ export function clampForRelay<T>(value: T, options: ClampOptions = {}): ClampRes
     for (const [key, entry] of Object.entries(node as Record<string, unknown>)) {
       budget -= byteLength(key)
       if (budget <= 0) {
+        // Same in-band marker as the array path, as a trailing key.
         truncated = true
+        out.__relayTruncated = true
         break
       }
       out[key] = walk(entry)
@@ -252,8 +288,19 @@ function estimateSize(node: unknown, byteLength: (s: string) => number): number 
   if (ArrayBuffer.isView(node)) return node.byteLength
   if (node === null || typeof node !== 'object') return 8
   if (Array.isArray(node)) return node.reduce((sum, entry) => sum + estimateSize(entry, byteLength), 16)
-  return Object.entries(node as Record<string, unknown>).reduce(
-    (sum, [key, entry]) => sum + byteLength(key) + estimateSize(entry, byteLength),
+  const entries = Object.entries(node as Record<string, unknown>)
+  // A bare marker object (the array-path entry) carries no payload either.
+  if (entries.length === 1 && (entries[0][0] === '__relayTruncated' || entries[0][0] === '__relayDropped') && entries[0][1] === true) {
+    return 0
+  }
+  return entries.reduce(
+    (sum, [key, entry]) => {
+      // Relay clamp markers are protocol overhead, not payload (both the
+      // boolean trailing key and the marker object in arrays): counting them
+      // would flip borderline payloads to wholesale tombstones.
+      if (key === '__relayTruncated' && entry === true) return sum
+      return sum + byteLength(key) + estimateSize(entry, byteLength)
+    },
     16,
   )
 }

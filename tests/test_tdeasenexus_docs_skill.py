@@ -13,12 +13,14 @@ developer's `%APPDATA%` profile.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+UV = shutil.which("uv") or str(Path.home() / ".local/bin" / "uv")
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "tdease-ai-capability" / "system" / "skills" / "tdeasenexus-docs"
@@ -30,7 +32,7 @@ ASSETS = ROOT / "tdease-ai-capability" / "system"
 
 def run_doctor(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["uv", "run", "--script", str(DOCTOR), *args],
+        [UV, "run", "--script", str(DOCTOR), *args],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -113,5 +115,5 @@ def test_skill_reference_pointers_resolve() -> None:
                       "references/repair-playbook.md", "scripts/doctor.py"):
         assert reference in text, f"SKILL.md no longer points at {reference}"
         assert (SKILL / reference).is_file(), f"missing shipped resource: {reference}"
-    assert shutil.which("uv"), "uv is required to execute skill scripts (see design/skill-runtime.md)"
+    assert os.path.isfile(UV), "uv is required to execute skill scripts (see design/skill-runtime.md)"
     assert sys.version_info >= (3, 11)

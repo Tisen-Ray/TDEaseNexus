@@ -1,13 +1,14 @@
 /**
- * File watcher — polls or uses native fs watching (chokidar) to detect
- * file changes in the workspace, driving canvas refresh and staleness.
+ * File watcher — native fs watching (chokidar) to detect file changes in the
+ * workspace, driving canvas refresh and staleness.
  *
  * FRONTEND-ZERO §6:
  *   file watcher drives all refresh: results pull, Agent writes assets,
  *   external file edits — one unified mechanism.
  *
  * In Electron: uses chokidar (native fs events).
- * In browser dev: uses polling (setInterval + stat).
+ * In browser dev: delivers NO events — the watcher is Electron-only; the
+ * store relies on explicit refresh instead.
  */
 import type { TDEaseDesktop } from '@/services/desktop/desktopBridge'
 
@@ -35,7 +36,8 @@ export interface FileWatcher {
  * Create a file watcher for a workspace directory.
  *
  * In Electron with full Node access, uses chokidar.
- * Falls back to polling for browser-only environments.
+ * In browser-only environments there is no fs access to watch — the fallback
+ * below is an honest no-op that never emits events.
  */
 export function createFileWatcher(workspaceRoot: string, patterns?: string[]): FileWatcher {
   // Check if we're in Electron with Node access. The desktop preload exposes
@@ -105,25 +107,21 @@ function createNativeWatcher(workspaceRoot: string, _patterns?: string[]): FileW
   }
 }
 
-// ── Polling watcher (browser fallback) ────────────────────────────────────────
+// ── Browser fallback (no events) ──────────────────────────────────────────────
 
 function createPollingWatcher(workspaceRoot: string, _patterns?: string[]): FileWatcher {
   const handlers = new Set<FileEventHandler>()
-  let intervalId: ReturnType<typeof setInterval> | null = null
 
   return {
     root: workspaceRoot,
 
     async start() {
-      if (intervalId) return
-      // In browser, file watching isn't available — events are synthetic.
-      // The store will poll for changes via explicit refresh instead.
-      console.debug('[fileWatcher] Polling mode — will use explicit refresh')
+      // Browser dev has no fs access to watch or poll; the store refreshes
+      // explicitly. Handlers registered here will simply never fire.
+      console.debug('[fileWatcher] Browser dev mode — no events; explicit refresh only')
     },
 
-    async stop() {
-      if (intervalId) { clearInterval(intervalId); intervalId = null }
-    },
+    async stop() {},
 
     on(handler: FileEventHandler): () => void {
       handlers.add(handler)

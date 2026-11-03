@@ -80,6 +80,22 @@ export const useSubagentsStore = defineStore('subagents', () => {
   const peeks = ref<Record<string, SubagentPeek>>({})
 
   /**
+   * Store a fresh snapshot, dropping peek cache entries whose record no
+   * longer appears — a peek outliving its child is stale conversation output
+   * the panel would keep rendering as if the child still existed.
+   */
+  function recordSnapshot(parentSessionId: string, snapshot: SubagentSnapshot): void {
+    snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
+    const live = new Set(snapshot.map((r) => r.subagentId))
+    const stalePeeks = Object.keys(peeks.value).filter((id) => !live.has(id))
+    if (stalePeeks.length > 0) {
+      const next = { ...peeks.value }
+      for (const id of stalePeeks) delete next[id]
+      peeks.value = next
+    }
+  }
+
+  /**
    * Bind to a parent session: pull the initial snapshot, then keep an
    * `onChanged` subscription alive for it (see `unsubscribers`). Safe to call
    * when no bridge is present (web/demo builds): the store simply reports
@@ -90,14 +106,14 @@ export const useSubagentsStore = defineStore('subagents', () => {
     if (!api) return
     if (!unsubscribers.has(parentSessionId)) {
       unsubscribers.set(parentSessionId, api.onChanged(parentSessionId, (snapshot) => {
-        snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
+        recordSnapshot(parentSessionId, snapshot)
       }))
     }
     loading.value = true
     error.value = null
     try {
       const snapshot = await api.list(parentSessionId)
-      snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
+      recordSnapshot(parentSessionId, snapshot)
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
@@ -131,9 +147,19 @@ export const useSubagentsStore = defineStore('subagents', () => {
   function forget(parentSessionId: string): void {
     unsubscribers.get(parentSessionId)?.()
     unsubscribers.delete(parentSessionId)
+    const snapshot = snapshots.value[parentSessionId]
     const next = { ...snapshots.value }
     delete next[parentSessionId]
     snapshots.value = next
+    if (snapshot) {
+      const gone = new Set(snapshot.map((r) => r.subagentId))
+      const nextPeeks = { ...peeks.value }
+      let changed = false
+      for (const id of Object.keys(nextPeeks)) {
+        if (gone.has(id)) { delete nextPeeks[id]; changed = true }
+      }
+      if (changed) peeks.value = nextPeeks
+    }
   }
 
   // Follow the active Agent session: bind on change so its snapshot is fresh.

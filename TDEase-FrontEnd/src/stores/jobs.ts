@@ -34,7 +34,14 @@ export const useJobsStore = defineStore('jobs', () => {
   /** Last error from list()/cancel(); surfaced in the inspector. */
   const error = ref<string | null>(null)
 
-  let activeUnsubscribe: (() => void) | null = null
+  /**
+   * Live `onChanged` subscriptions, one per observed parent session (mirrors
+   * `subagents.ts`). Subscribing BEFORE `await list()` means no registry
+   * mutation can land in the gap between the initial fill and the push
+   * channel opening; keeping one per session means an interleaved switch
+   * never clobbers another session's unsubscribe handle.
+   */
+  const unsubscribers = new Map<string, () => void>()
 
   const agentStore = useAgentStore()
   const activeSessionId = computed(() => agentStore.active?.id ?? null)
@@ -52,39 +59,50 @@ export const useJobsStore = defineStore('jobs', () => {
   const peeks = ref<Record<string, JobPeek>>({})
 
   /**
-   * Bind to a parent session: pull the initial snapshot, then subscribe to
-   * `onChanged` so every registry mutation (start / settle / cancel) lands
-   * without polling. Safe to call when no bridge is present (web/demo builds):
-   * the store simply reports empty lists.
+   * Store a fresh snapshot, dropping peek cache entries whose record no
+   * longer appears — a peek outliving its job is stale output the panel
+   * would keep rendering as if the job still existed.
+   */
+  function recordSnapshot(parentSessionId: string, snapshot: JobSnapshot): void {
+    snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
+    const live = new Set(snapshot.map((r) => r.jobId))
+    const stalePeeks = Object.keys(peeks.value).filter((id) => !live.has(id))
+    if (stalePeeks.length > 0) {
+      const next = { ...peeks.value }
+      for (const id of stalePeeks) delete next[id]
+      peeks.value = next
+    }
+  }
+
+  /**
+   * Bind to a parent session: open the `onChanged` subscription FIRST (see
+   * `unsubscribers`), then pull the initial snapshot. Safe to call when no
+   * bridge is present (web/demo builds): the store simply reports empty lists.
    */
   async function bind(parentSessionId: string): Promise<void> {
     const api = bridge()
     if (!api) return
-    // Tear down any previous subscription before opening a new one — the
-    // registry pushes per-parent, and a stale listener would shadow the new
-    // one's snapshots.
-    teardown()
+    if (!unsubscribers.has(parentSessionId)) {
+      unsubscribers.set(parentSessionId, api.onChanged(parentSessionId, (snapshot) => {
+        recordSnapshot(parentSessionId, snapshot)
+      }))
+    }
     loading.value = true
     error.value = null
     try {
       const snapshot = await api.list(parentSessionId)
-      snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
+      recordSnapshot(parentSessionId, snapshot)
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
       loading.value = false
     }
-    activeUnsubscribe = api.onChanged(parentSessionId, (snapshot) => {
-      snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
-    })
   }
 
-  /** Drop the active subscription. Keeps accumulated snapshots (switch-back restore). */
+  /** Drop every subscription (app teardown). Keeps accumulated snapshots. */
   function teardown(): void {
-    if (activeUnsubscribe) {
-      activeUnsubscribe()
-      activeUnsubscribe = null
-    }
+    for (const unsubscribe of unsubscribers.values()) unsubscribe()
+    unsubscribers.clear()
   }
 
   /**
@@ -103,19 +121,29 @@ export const useJobsStore = defineStore('jobs', () => {
     }
   }
 
-  /** Drop a session's snapshot (call when the session itself is disposed). */
+  /** Drop a session's snapshot and subscription (call when the session itself is disposed). */
   function forget(parentSessionId: string): void {
-    if (activeUnsubscribe && activeSessionId.value === parentSessionId) teardown()
+    unsubscribers.get(parentSessionId)?.()
+    unsubscribers.delete(parentSessionId)
+    const snapshot = snapshots.value[parentSessionId]
     const next = { ...snapshots.value }
     delete next[parentSessionId]
     snapshots.value = next
+    if (snapshot) {
+      const gone = new Set(snapshot.map((r) => r.jobId))
+      const nextPeeks = { ...peeks.value }
+      let changed = false
+      for (const id of Object.keys(nextPeeks)) {
+        if (gone.has(id)) { delete nextPeeks[id]; changed = true }
+      }
+      if (changed) peeks.value = nextPeeks
+    }
   }
 
-  // Follow the active Agent session: bind on change, teardown on unmount/switch.
-  watch(activeSessionId, (id, prev) => {
-    if (prev && prev !== id) teardown()
+  // Follow the active Agent session: bind on change so its snapshot is fresh.
+  // Existing subscriptions for other sessions stay alive (see `unsubscribers`).
+  watch(activeSessionId, (id) => {
     if (id) void bind(id)
-    else teardown()
   }, { immediate: true })
 
   /** Lookup helper for inline rendering. */

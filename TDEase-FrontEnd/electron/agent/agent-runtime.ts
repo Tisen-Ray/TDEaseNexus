@@ -532,6 +532,12 @@ export class AgentRuntime {
   }
 
   async fork(sessionId: string, targetSessionId: string): Promise<{ ok: true }> {
+    // F12: a bound host owns the target's live state — forking into it would
+    // clone artifacts underneath a running session. (The on-disk transcript
+    // case is refused inside SessionHost.fork.)
+    if (this.sessions.has(targetSessionId)) {
+      throw new Error(`Cannot fork: target session ${targetSessionId} is bound to a live agent session`)
+    }
     const entry = requiredEntry(this.sessions, sessionId)
     await entry.host.fork(targetSessionId)
     return { ok: true }

@@ -532,6 +532,11 @@ function buildMcpTool(workspaceRoot: string, systemRoot: string, permission: Per
     ) => {
       const { refresh, ...call } = params ?? {}
       const action = String(call?.action || '')
+      // F15: 'servers' is gated like tools/call — listing configured MCP
+      // servers (their names, commands and args) is itself reconnaissance
+      // value; leaving it ungated let a denied session enumerate the MCP
+      // surface it was denied from using.
+      enforcePermission(permission, 'shell.exec')
       if (action === 'servers') return textResult(dedup.filter(mcpText(provider.listServers()), 'mcp', refresh === true))
       const server = String(call?.server || '')
       if (!server) throw new Error('mcp server is required')

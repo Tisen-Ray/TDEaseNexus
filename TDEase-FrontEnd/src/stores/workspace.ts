@@ -262,77 +262,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  async function loadDirectory(
-    dirPath: string,
-    _options: { missing?: 'empty' | 'error' } = {},
-  ): Promise<FileTreeNode[]> {
-    if (dirLoadingSet.value.has(dirPath)) return getCachedDir(dirPath) || []
-    dirLoadingSet.value.add(dirPath)
-    try {
-      const fs = getViewsFS()
-      const files = await fs.listFiles('*', dirPath)
-      const nodes = buildTree(files.map(f => {
-        // Make paths relative to this directory
-        const rel = f.startsWith(dirPath) ? f.slice(dirPath.length).replace(/^[/\\]/, '') : f
-        return rel
-      }), dirPath)
-      directoryCache.value.set(dirPath, nodes)
-      return nodes
-    } catch (err) {
-      log.error('Failed to load directory', dirPath, err)
-      return []
-    } finally {
-      dirLoadingSet.value.delete(dirPath)
-    }
-  }
-
-  /** Build a tree from flat file list. Paths are assumed relative to workspace root. */
-  function buildTree(paths: string[], root: string): FileTreeNode[] {
-    // Strip the workspace root prefix from paths so tree paths are workspace-relative.
-    const prefix = root ? (root.replace(/\\/g, '/').replace(/\/?$/, '/')) : ''
-    const trimmed = prefix
-      ? paths.map(p => p.replace(/\\/g, '/').replace(prefix, ''))
-      : paths
-
-    const rootNode: FileTreeNode = {
-      name: root.split('/').pop() || root.split('\\').pop() || root,
-      path: '',
-      type: 'directory',
-      children: [],
-      loaded: true,
-    }
-
-    for (const p of trimmed.sort()) {
-      if (!p) continue
-      const parts = p.split('/')
-      let current = rootNode
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i]
-        if (!part) continue
-        const isLast = i === parts.length - 1
-        const childPath = parts.slice(0, i + 1).join('/')
-        let child = current.children?.find(c => c.name === part)
-        if (!child) {
-          child = {
-            name: part,
-            path: childPath,
-            // `listFiles()` returns files, not directory entries.  A file such
-            // as `Snakefile` has no extension, so names cannot determine type.
-            type: isLast ? 'file' : 'directory',
-            status: 'local',
-            children: isLast ? undefined : [],
-            loaded: isLast,
-          }
-          if (!current.children) current.children = []
-          current.children.push(child)
-        }
-        if (!isLast) current = child
-      }
-    }
-
-    return rootNode.children || []
-  }
-
   function isDirLoaded(path: string): boolean {
     return directoryCache.value.has(path)
   }
@@ -577,15 +506,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return newPath
   }
 
-  /** Trash one or more paths. Returns the paths actually removed. */
+  /** Trash one or more paths. Returns ONLY the paths actually removed — a
+   *  failed fs.trash() must not prune the tree for a path that still exists. */
   async function trashPaths(paths: string[]): Promise<string[]> {
     if (paths.length === 0) return []
     const fs = getViewsFS()
+    const removed: string[] = []
     for (const p of paths) {
-      try { await fs.trash(absOf(p)) } catch (err) { log.error('trash failed', p, err) }
+      try {
+        await fs.trash(absOf(p))
+        removed.push(p)
+      } catch (err) { log.error('trash failed', p, err) }
     }
-    for (const p of paths) prunePathFromTree(p)
-    return paths
+    for (const p of removed) prunePathFromTree(p)
+    return removed
   }
 
   /** Move multiple source entries into a destination directory. */
@@ -780,7 +714,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isPathExpanded,
     setWorkspace,
     loadFileTree,
-    loadDirectory,
     loadDirLazy,
     loadDirsLazy,
     refreshExpanded,

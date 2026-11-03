@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _ms1_fixture import graft_parent_ms1  # noqa: E402
+UV = shutil.which("uv") or str(Path.home() / ".local/bin" / "uv")
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,7 +63,7 @@ def run_spectral(*args: str, cwd: Path | None = None) -> dict:
     kernel's warnings verbatim and the console code page is not UTF-8 on all
     hosts."""
     completed = subprocess.run(
-        ["uv", "run", "--script", str(SPECTRAL), *args],
+        [UV, "run", "--script", str(SPECTRAL), *args],
         cwd=cwd or ROOT, capture_output=True, check=False,
     )
     payload = json.loads(completed.stdout.decode("utf-8")) if completed.stdout else {}

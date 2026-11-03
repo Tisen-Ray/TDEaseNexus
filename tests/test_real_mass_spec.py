@@ -246,12 +246,12 @@ class TestRealMassSpecPipeline:
 class TestExecutionRuntimeReal:
     """Execute real shell commands through the Execution Runtime."""
 
-    def test_real_shell_pipeline(self, tmp_path):
+    def test_real_shell_pipeline(self, tmp_path, monkeypatch):
         """Execute a real 3-step pipeline: echo → python → wc."""
         from src.execution_runtime import StorageLayout, set_storage, execute
         from src.contracts import RunCommit
 
-        os.environ["TDEASE_DATA_ROOT"] = str(tmp_path / "data")
+        monkeypatch.setenv("TDEASE_DATA_ROOT", str(tmp_path / "data"))
         st = StorageLayout(tmp_path / "data")
         st.bootstrap()
         set_storage(st)
@@ -351,7 +351,7 @@ rule step3:
 class TestPortability:
     """Verify data-root and result file portability."""
 
-    def test_move_data_root_preserves_run_files(self, tmp_path):
+    def test_move_data_root_preserves_run_files(self, tmp_path, monkeypatch):
         """Moving the entire data-root to a new location preserves Run result files.
 
         This tests that Run result files use relative directory organization
@@ -365,7 +365,7 @@ class TestPortability:
 
         data1 = tmp_path / "data1"
         data1.mkdir()
-        os.environ["TDEASE_DATA_ROOT"] = str(data1)
+        monkeypatch.setenv("TDEASE_DATA_ROOT", str(data1))
         st1 = StorageLayout(data1); st1.bootstrap(); set_storage(st1)
 
         snakefile = 'rule a:\n    shell:\n        "echo STATIC_OUTPUT_42 > result.txt"'
@@ -395,7 +395,7 @@ class TestPortability:
         # Move data-root to new location
         data2 = tmp_path / "data2"
         shutil.move(str(data1), str(data2))
-        os.environ["TDEASE_DATA_ROOT"] = str(data2)
+        monkeypatch.setenv("TDEASE_DATA_ROOT", str(data2))
 
         # Verify results are still accessible from new location
         out2 = (data2 / "runs" / "portable-1" / "result.txt").read_text()

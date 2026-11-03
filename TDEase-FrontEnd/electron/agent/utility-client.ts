@@ -41,6 +41,7 @@ import type { RunSummary } from '../../src/studio/domain/run'
 import {
   clampForRelay,
   deserializeError,
+  findRelayClampMarker,
   serializeError,
   type AgentDepMethod,
   type AgentHostMethod,
@@ -126,6 +127,12 @@ export interface AgentRuntimeClient {
 export function createAgentRuntimeClient(options: AgentClientOptions): AgentRuntimeClient {
   const { spawn, push, deps, crashLog } = options
   const respawnDelayMs = options.respawnDelayMs ?? 500
+  // F6: crash respawn uses exponential backoff with jitter, capped, and a
+  // consecutive-crash circuit breaker. Failure scenario this closes: a child
+  // that crashes at boot used to respawn every 500 ms forever, replaying all
+  // bound sessions each cycle — a log- and CPU-spinning loop with no exit.
+  const RESPAWN_BACKOFF_CAP_MS = 30_000
+  const MAX_CONSECUTIVE_CRASHES = 5
 
   let child: AgentChildLike | null = null
   let bootPromise: Promise<void> | null = null
@@ -137,8 +144,14 @@ export function createAgentRuntimeClient(options: AgentClientOptions): AgentRunt
   const ledgerHandles = new Map<string, string>()
   let respawnTimer: ReturnType<typeof setTimeout> | null = null
   const readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
+  /** Consecutive child exits without a successfully served response in between. */
+  let consecutiveCrashes = 0
+  /** Circuit-breaker open: the child crashed MAX_CONSECUTIVE_CRASHES times in
+   *  a row; no further respawn is attempted and every call fails fast. */
+  let fatal = false
 
   function ensureChild(): Promise<void> {
+    if (fatal) return Promise.reject(new Error('Agent utility process crashed repeatedly and was not respawned; restart the app to reset the agent runtime'))
     if (!bootPromise) bootPromise = boot()
     return bootPromise
   }
@@ -171,16 +184,45 @@ export function createAgentRuntimeClient(options: AgentClientOptions): AgentRunt
         const pending = pendingRequests.get(message.id)
         if (!pending) return
         pendingRequests.delete(message.id)
-        if (message.ok) pending.resolve(message.v)
+        // F4: a response the child's relay clamp tombstoned is corrupt —
+        // reject instead of resolving with a silently shortened payload.
+        if (message.ok && findRelayClampMarker(message.v)) {
+          pending.reject(new Error('Agent utility relay truncated the response; refusing corrupt data'))
+          return
+        }
+        if (message.ok) {
+          // The child is healthy enough to serve requests — reset the F6
+          // consecutive-crash streak.
+          consecutiveCrashes = 0
+          pending.resolve(message.v)
+        }
         else pending.reject(deserializeError(message.e, 'agent utility request failed'))
         break
       }
-      case 'ev':
+      case 'ev': {
+        // F4: clamped push data is corrupt; never dispatch it to routing.
+        if (findRelayClampMarker(message.a)) {
+          crashLog.error('agent-client.push-clamped-marker', { kind: message.k })
+          return
+        }
         dispatchPush(message.k, message.a)
         break
-      case 'call':
+      }
+      case 'call': {
+        // F4: reverse-call args clamped by the child's sender are corrupt —
+        // answer with an error instead of dispatching a truncated call.
+        if (findRelayClampMarker(message.a)) {
+          child?.postMessage({
+            t: 'cres',
+            id: message.id,
+            ok: false,
+            e: serializeError(new Error('Agent utility relay truncated reverse-call arguments; refusing corrupt data')),
+          })
+          return
+        }
         void dispatchDep(message)
         break
+      }
       case 'ledger':
         applyLedger(message.op, message.a)
         break
@@ -285,6 +327,20 @@ export function createAgentRuntimeClient(options: AgentClientOptions): AgentRunt
     await ensureChild()
     const id = nextRequestId++
     const clamped = clampForRelay(args)
+    // F5: never transmit clamped/dropped args as if intact. Failure scenario:
+    // a prompt whose message was clamped at the relay cap used to arrive as a
+    // silently truncated string — the model answered a different question and
+    // nobody could tell. Dropped (tombstoned) args reject for EVERY method;
+    // prompt/bindSession additionally reject on any truncation, because their
+    // payloads are conversation truth and a shortened copy is corrupt.
+    if (clamped.dropped) {
+      crashLog.error('agent-client.request-dropped', { method })
+      throw new Error(`agent-client: ${method} arguments exceeded the relay message cap and were dropped; refusing to send corrupt data`)
+    }
+    if (clamped.truncated && (method === 'prompt' || method === 'bindSession')) {
+      crashLog.error('agent-client.request-truncated', { method })
+      throw new Error(`agent-client: ${method} arguments were truncated by the relay clamp; refusing to send corrupt data`)
+    }
     if (clamped.truncated) crashLog.warn('agent-client.request-clamped', { method, dropped: clamped.dropped })
     return new Promise<unknown>((resolve, reject) => {
       pendingRequests.set(id, { resolve, reject })
@@ -309,16 +365,48 @@ export function createAgentRuntimeClient(options: AgentClientOptions): AgentRunt
     for (const waiter of waiters) waiter.reject(error)
     child = null
     bootPromise = null
+    // F8: settle in-flight ledger rows before dropping the handle map —
+    // otherwise the turn's tokens vanish from stats and main's ledger pending
+    // map leaks the entry forever (no child-side finish will ever arrive).
+    for (const realRequestId of ledgerHandles.values()) {
+      try {
+        deps.usageLedger.recordError(
+          realRequestId,
+          new Error('Agent utility process exited before usage was reported'),
+          'aborted',
+        )
+      } catch (settleError) {
+        crashLog.warn('agent-client.ledger-settle-failed', { realRequestId, error: settleError })
+      }
+    }
     ledgerHandles.clear()
     if (options.isQuitting()) return
-    crashLog.info('agent-client.respawn-scheduled', { delayMs: respawnDelayMs, sessions: boundInputs.size })
+    // F6 circuit breaker: count crashes that happened without one successfully
+    // served response in between; after the cap, stop respawning for good.
+    consecutiveCrashes += 1
+    if (consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES) {
+      fatal = true
+      crashLog.error('agent-client.fatal-no-respawn', {
+        code,
+        consecutiveCrashes,
+        sessions: boundInputs.size,
+        message: 'Agent utility process crashed repeatedly; giving up on respawn. Restart the app to reset the agent runtime.',
+      })
+      return
+    }
+    // F6: exponential backoff with jitter (base × 2^streak, capped, ×1..1.25
+    // jitter) instead of a fixed delay — a crash loop must not hot-cycle.
+    const delayMs = Math.round(
+      Math.min(respawnDelayMs * 2 ** (consecutiveCrashes - 1), RESPAWN_BACKOFF_CAP_MS) * (1 + Math.random() * 0.25),
+    )
+    crashLog.info('agent-client.respawn-scheduled', { delayMs, consecutiveCrashes, sessions: boundInputs.size })
     if (respawnTimer) clearTimeout(respawnTimer)
     respawnTimer = setTimeout(() => {
       respawnTimer = null
       void ensureChild()
         .then(() => replayBindings())
         .catch((respawnError) => crashLog.error('agent-client.respawn-failed', respawnError))
-    }, respawnDelayMs)
+    }, delayMs)
   }
 
   async function replayBindings(): Promise<void> {

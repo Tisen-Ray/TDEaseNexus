@@ -97,12 +97,18 @@ export const useThemeStore = defineStore('theme', () => {
 
   const toggleTheme = () => {
     const themes = Object.entries(themeMetadata) as [CatppuccinTheme, typeof themeMetadata[CatppuccinTheme]][]
-
-    // Find next theme with different mode (light/dark toggle)
     const currentIndex = themes.findIndex(([t]) => t === currentTheme.value)
-    const nextTheme = themes[(currentIndex + 1) % themes.length][0]
+    const currentMode = currentIndex >= 0 ? themes[currentIndex][1].mode : 'dark'
 
-    setTheme(nextTheme)
+    // Find the next theme (metadata order, wrapping) whose mode differs — a
+    // genuine light/dark toggle, not a step to the adjacent sibling variant.
+    for (let step = 1; step <= themes.length; step++) {
+      const candidate = themes[(currentIndex + step) % themes.length]
+      if (candidate[1].mode !== currentMode) {
+        setTheme(candidate[0])
+        return
+      }
+    }
   }
 
   // Initialize theme on store creation

@@ -29,6 +29,7 @@ import type { RuntimePush } from './contracts'
 import {
   clampForRelay,
   deserializeError,
+  findRelayClampMarker,
   serializeError,
   type AgentDepMethod,
   type AgentPushKind,
@@ -99,16 +100,27 @@ export function createAgentHost(options: AgentHostOptions): {
     })
   }
 
-  function refreshBackendConnection(): void {
-    void callMain('backendConnection', [])
-      .then((snapshot) => { backendSnapshot = snapshot as BackendConnection })
-      .catch(() => undefined)
+  /** F7: snapshot refreshes are AWAITED (bounded by REFRESH_TIMEOUT_MS) ahead
+   * of each host request. Failure scenario they close: the old fire-and-forget
+   * refresh raced the dispatch — bindSession/prompt ran against a stale backend
+   * URL or stale credentials right after the user edited Settings, because the
+   * request was dispatched in the same tick the refresh was still in flight. */
+  function refreshBackendConnection(): Promise<void> {
+    return settleWithinTimeout(
+      callMain('backendConnection', [])
+        .then((snapshot) => { backendSnapshot = snapshot as BackendConnection }),
+      'backendConnection',
+      logger,
+    )
   }
 
-  function refreshCredentialKeys(): void {
-    void callMain('credentialKeys', [])
-      .then((snapshot) => { if (snapshot && typeof snapshot === 'object') credentialSnapshot = snapshot as Record<string, string> })
-      .catch(() => undefined)
+  function refreshCredentialKeys(): Promise<void> {
+    return settleWithinTimeout(
+      callMain('credentialKeys', [])
+        .then((snapshot) => { if (snapshot && typeof snapshot === 'object') credentialSnapshot = snapshot as Record<string, string> }),
+      'credentialKeys',
+      logger,
+    )
   }
 
   function pushEvent(kind: AgentPushKind, args: unknown[]): void {
@@ -179,13 +191,20 @@ export function createAgentHost(options: AgentHostOptions): {
       const message = raw as RelayMessage
       if (!message || typeof message !== 'object' || typeof message.t !== 'string') return
       if (message.t === 'req') {
+        // F4: request args clamped by main's sender carry a tombstone —
+        // answer with an error instead of dispatching corrupt input.
+        if (findRelayClampMarker(message.a)) {
+          respond(message.id, false, new Error('Agent utility relay truncated the request arguments; refusing corrupt data'))
+          return
+        }
         // Refresh the backend snapshot ahead of every request: bindSession and
         // run dispatch read it synchronously inside the child. Credential keys
         // ride the same refresh so a Settings key edit applies from the next
         // turn on, exactly like a plaintext settings.json edit always did.
-        refreshBackendConnection()
-        refreshCredentialKeys()
-        void dispatch(message.m, message.a)
+        // F7: both refreshes are AWAITED (with a timeout) so the request never
+        // dispatches on the stale snapshot it was supposed to replace.
+        void Promise.all([refreshBackendConnection(), refreshCredentialKeys()])
+          .then(() => dispatch(message.m, message.a))
           .then((value) => respond(message.id, true, value))
           .catch((error: unknown) => respond(message.id, false, error))
         return
@@ -194,6 +213,11 @@ export function createAgentHost(options: AgentHostOptions): {
         const pending = pendingCalls.get(message.id)
         if (!pending) return
         pendingCalls.delete(message.id)
+        // F4: a clamped reverse-call result is corrupt — reject it.
+        if (message.ok && findRelayClampMarker(message.v)) {
+          pending.reject(new Error('Agent utility relay truncated the reverse-call result; refusing corrupt data'))
+          return
+        }
         if (message.ok) pending.resolve(message.v)
         else pending.reject(deserializeError(message.e, `agent-host reverse call failed`))
       }
@@ -211,8 +235,8 @@ export function createAgentHost(options: AgentHostOptions): {
 
   // Seed the backend snapshot immediately; until it lands the sync read throws
   // exactly like main's backendConnectionInfo() does before the backend is up.
-  refreshBackendConnection()
-  refreshCredentialKeys()
+  void refreshBackendConnection()
+  void refreshCredentialKeys()
 
   return {
     push,
@@ -231,4 +255,27 @@ const consoleLogger: HostLogger = {
   info: () => undefined,
   warn: (event, details) => console.warn(`[agent-host] ${event}`, details ?? ''),
   error: (event, details) => console.error(`[agent-host] ${event}`, details ?? ''),
+}
+
+/** F7 bound for snapshot refreshes: a hung main must not hang the request. */
+const REFRESH_TIMEOUT_MS = 5_000
+
+/** Resolve when the refresh settles OR the timeout fires — whichever first.
+ *  Failures (and timeouts) are logged, never thrown: the request then runs on
+ *  the last good snapshot, which is the pre-F7 behavior as a fallback. */
+function settleWithinTimeout(work: Promise<void>, dep: string, logger: HostLogger): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      logger.warn('agent-host.refresh-timeout', { dep, timeoutMs: REFRESH_TIMEOUT_MS })
+      resolve()
+    }, REFRESH_TIMEOUT_MS)
+    work.then(
+      () => { clearTimeout(timer); resolve() },
+      (error) => {
+        clearTimeout(timer)
+        logger.warn('agent-host.refresh-failed', { dep, error })
+        resolve()
+      },
+    )
+  })
 }

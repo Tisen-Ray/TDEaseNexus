@@ -168,6 +168,21 @@ describe('NodePermissionGateway.assertShellCommand', () => {
     expect(() => gateway.assertShellCommand('mv ../escape.txt .')).toThrow(/file deletion or movement outside the workspace/)
   })
 
+  it('denies relative cd chains that escape the workspace root before a delete/move (F2)', () => {
+    // `cd ..` from the workspace root lands OUTSIDE it; every relative operand
+    // of a later rm/mv then acts on an arbitrary sibling directory. The cd
+    // chain is resolved against the known cwd chain and deny-dominant.
+    expect(() => gateway.assertShellCommand('cd .. && rm -rf x')).toThrow(/file deletion or movement outside the workspace/)
+    expect(() => gateway.assertShellCommand('cd ../.. && rm -rf x')).toThrow(/file deletion or movement outside the workspace/)
+    expect(() => gateway.assertShellCommand('cd sub && cd ../.. && mv x y')).toThrow(/file deletion or movement outside the workspace/)
+    // Descending stays allowed: the resolved target is still inside.
+    expect(() => gateway.assertShellCommand('cd runs && rm -rf x')).not.toThrow()
+    expect(() => gateway.assertShellCommand('cd runs && cd .. && rm -rf x')).not.toThrow()
+    // An absolute cd INSIDE the workspace (masked to <workspace>) stays allowed.
+    const ws = path.join(os.tmpdir(), 'tdease-gw-test')
+    expect(() => gateway.assertShellCommand(`cd ${ws.replace(/\\/g, '/')}/runs && rm -rf x`)).not.toThrow()
+  })
+
   it('does not shadow ordinary analysis commands', () => {
     // Word boundaries must not fire on substrings (form.rs, model_del.txt,
     // mvn) or the sanctioned checklist query the Agent loops over.

@@ -25,7 +25,14 @@ export const useSessionRunsStore = defineStore('sessionRuns', () => {
   /** Per-parent-session snapshots. Keyed by parent sessionId. */
   const snapshots = ref<Record<string, SessionRunSnapshot>>({})
 
-  let activeUnsubscribe: (() => void) | null = null
+  /**
+   * Live `onChanged` subscriptions, one per observed parent session (mirrors
+   * `subagents.ts` / `jobs.ts`). Subscribing BEFORE `await list()` means no
+   * status change can land in the gap between the initial fill and the push
+   * channel opening; keeping one per session means an interleaved switch
+   * never clobbers another session's unsubscribe handle.
+   */
+  const unsubscribers = new Map<string, () => void>()
 
   const agentStore = useAgentStore()
   const activeSessionId = computed(() => agentStore.active?.id ?? null)
@@ -40,44 +47,44 @@ export const useSessionRunsStore = defineStore('sessionRuns', () => {
   const runningCount = computed(() =>
     active.value.filter((run) => run.status === 'RUNNING' || run.status === 'QUEUED').length)
 
-  /** Bind to a parent session: pull the initial snapshot, then subscribe.
+  /** Bind to a parent session: open the `onChanged` subscription FIRST (see
+   *  `unsubscribers`), then pull the initial snapshot.
    *  Safe without a bridge (web/demo builds) — the store reports empty. */
   async function bind(parentSessionId: string): Promise<void> {
     const api = bridge()
     if (!api) return
-    teardown()
+    if (!unsubscribers.has(parentSessionId)) {
+      unsubscribers.set(parentSessionId, api.onChanged(parentSessionId, (snapshot) => {
+        snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
+      }))
+    }
     try {
       const snapshot = await api.list(parentSessionId)
       snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
     } catch {
       // The initial fill is best-effort; the push channel keeps it current.
     }
-    activeUnsubscribe = api.onChanged(parentSessionId, (snapshot) => {
-      snapshots.value = { ...snapshots.value, [parentSessionId]: snapshot }
-    })
   }
 
-  /** Drop the active subscription. Keeps accumulated snapshots (switch-back restore). */
+  /** Drop every subscription (app teardown). Keeps accumulated snapshots. */
   function teardown(): void {
-    if (activeUnsubscribe) {
-      activeUnsubscribe()
-      activeUnsubscribe = null
-    }
+    for (const unsubscribe of unsubscribers.values()) unsubscribe()
+    unsubscribers.clear()
   }
 
-  /** Drop a session's snapshot (call when the session itself is disposed). */
+  /** Drop a session's snapshot and subscription (call when the session itself is disposed). */
   function forget(parentSessionId: string): void {
-    if (activeUnsubscribe && activeSessionId.value === parentSessionId) teardown()
+    unsubscribers.get(parentSessionId)?.()
+    unsubscribers.delete(parentSessionId)
     const next = { ...snapshots.value }
     delete next[parentSessionId]
     snapshots.value = next
   }
 
-  // Follow the active Agent session: bind on change, teardown on switch.
-  watch(activeSessionId, (id, prev) => {
-    if (prev && prev !== id) teardown()
+  // Follow the active Agent session: bind on change so its snapshot is fresh.
+  // Existing subscriptions for other sessions stay alive (see `unsubscribers`).
+  watch(activeSessionId, (id) => {
     if (id) void bind(id)
-    else teardown()
   }, { immediate: true })
 
   return {

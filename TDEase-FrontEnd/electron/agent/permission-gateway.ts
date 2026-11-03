@@ -408,10 +408,17 @@ export class NodePermissionGateway implements PermissionGateway {
    */
   private assertScopedDeleteMove(views: string[]): void {
     for (const view of views) {
+      // F2: resolve the command's `cd` chain against the workspace root first.
+      // Failure scenario: `cd .. && rm -rf x` — every operand rule judged `x`
+      // workspace-relative, but by the time rm runs the cwd is OUTSIDE the
+      // workspace, so `x` deletes an arbitrary sibling directory. Deny-dominant:
+      // once the cd chain escapes the root, every delete/move operand in the
+      // WHOLE command is treated as an outside target.
+      const escaped = cdChainEscapesWorkspace(view)
       for (const segment of view.split(/(?:&&|\|\||[;|\n])/)) {
         if (!DELETE_MOVE_VERB.test(segment)) continue
         for (const operand of deleteMoveOperands(segment)) {
-          if (OUTSIDE_TARGET.test(operand) || DEPTH_ESCAPE.test(operand)) {
+          if (escaped || OUTSIDE_TARGET.test(operand) || DEPTH_ESCAPE.test(operand)) {
             throw new Error('Sandbox denied file deletion or movement outside the workspace.')
           }
         }
@@ -447,6 +454,50 @@ function deleteMoveOperands(segment: string): string[] {
     }
   }
   return operands
+}
+
+/**
+ * F2: walk the command's `cd` segments in order, tracking a workspace-relative
+ * depth (root = 0). Runs on the MASKED view, where every spelling of the
+ * workspace root is `<workspace>`; other masked roots (`<app-data>`,
+ * `<system-assets>`) and unresolvable targets (`cd -`, subshells) stop tracking
+ * without an escape verdict — same best-effort honesty as the rest of this
+ * layer. Returns true when a `cd` chain's `..` count crosses above the
+ * workspace root or lands on an outside absolute/home/env target.
+ */
+function cdChainEscapesWorkspace(view: string): boolean {
+  const CD_TOKEN = /^cd$/i
+  let depth = 0
+  const segments = view.split(/(?:&&|\|\||[;|\n])/)
+  for (const segment of segments) {
+    const tokens = segment.trim().split(/\s+/).filter(Boolean)
+    if (tokens.length === 0 || !CD_TOKEN.test(tokens[0])) continue
+    let operand: string | undefined
+    for (let i = 1; i < tokens.length; i++) {
+      if (tokens[i] === '--') continue
+      operand = tokens[i].replace(/^["']+|["']+$/g, '')
+      break
+    }
+    if (operand === undefined || operand === '-') return false // bare `cd` (→ $HOME) is denied by the cd rule; `cd -` is untrackable
+    if (operand.startsWith('<workspace>')) {
+      depth = 0
+      operand = operand.slice('<workspace>'.length)
+    } else if (/^<[a-z-]+>/.test(operand)) {
+      return false // another deliberately exposed root — not a workspace escape
+    } else if (OUTSIDE_TARGET.test(operand)) {
+      return true
+    }
+    for (const part of operand.split(/[\\/]/)) {
+      if (part === '' || part === '.') continue
+      if (part === '..') {
+        depth -= 1
+        if (depth < 0) return true
+      } else {
+        depth += 1
+      }
+    }
+  }
+  return false
 }
 
 /** Remove interior `/./` segments (repeatedly — `a/././b` collapses over two

@@ -4,11 +4,13 @@
 # types: feat fix docs style refactor perf test build ci chore release revert
 # The legacy `[tag] ...` style is also accepted during the transition, so
 # old tooling/scripts keep working; new commits should prefer conventional.
-msg=$(cat "$1")
-if printf '%s' "$msg" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|release|revert)(\([^\)]+\))?: .+'; then
+# Anchor to the SUBJECT line only: a conventional-looking line buried in the
+# body must not validate a garbage subject.
+subject=$(sed -n '1p' "$1")
+if printf '%s' "$subject" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|release|revert)(\([^\)]+\))?: .+'; then
   exit 0
 fi
-if printf '%s' "$msg" | grep -qE '^\[(feat|fix|docs|refactor|release|docs|scaffold|update|ux|audit|doctrine|case[0-9]*|test)\] .+'; then
+if printf '%s' "$subject" | grep -qE '^\[(feat|fix|docs|refactor|release|docs|scaffold|update|ux|audit|doctrine|case[0-9]*|test)\] .+'; then
   # legacy style tolerated but flagged, so the transition is visible
   echo "note: legacy [tag] commit style — prefer 'type(scope): subject' going forward" >&2
   exit 0

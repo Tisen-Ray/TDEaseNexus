@@ -157,7 +157,16 @@ export function createPersistentBashTool(options: PersistentBashToolOptions) {
       // Keep shell state useful without making relative paths depend on the
       // previous command. Explicit cwd is scoped to this call only.
       const commandCwd = cwd ?? options.workspaceRoot
-      const inner = `cd -- ${quoteForBash(commandCwd)} 2>/dev/null; ${command}`
+      // F3: cd failures must fail the call loudly. The old `cd X 2>/dev/null;
+      // cmd` swallowed the error AND ran the command from a drifted cwd, so
+      // relative operands acted on the wrong directory. Guarding with if/else
+      // keeps the shell alive, surfaces cd's stderr, and reports a non-zero
+      // status (the else branch's trailing `false`) with a clear message
+      // instead of silently executing in the wrong place.
+      const cdFailed = 'cd failed for the requested working directory; command not executed'
+      // Newline separators (not `;`) so a command that itself ends in `;`
+      // cannot produce a `;;` syntax error before the else branch.
+      const inner = `if cd -- ${quoteForBash(commandCwd)}\nthen\n${command}\nelse\nprintf %s\\n ${quoteForBash(cdFailed)}: ${quoteForBash(commandCwd)} >&2\nfalse\nfi`
       const wrapped = wrapCommand(inner, marker)
       let first = true
       let fallback = ''

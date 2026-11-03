@@ -93,6 +93,8 @@ export class SessionHost {
   private unsubscribe: (() => void) | null = null
   private activeRun: ActiveAgentRun | null = null
   private persistenceTail = Promise.resolve()
+  /** First unsettled append failure (F1): rethrown by flushPersistence(). */
+  private persistenceFailure: unknown = null
   private observedEvents = 0
   private prompting = false
   private disposed = false
@@ -333,6 +335,7 @@ export class SessionHost {
     const assembled = rewritePromptForProvider(canonicalPrompt, this.options.toolNames)
     await this.options.store.writeSnapshot(this.options.binding.sessionId, assembled.digest, assembled.systemPrompt)
     this.activeRun = { definition, prompt: assembled, requestSeq: 0, toolCalls: 0, blocked: null }
+    // F1: handled fire-and-forget — surfaced via flushPersistence below.
     this.enqueueAppend({
       type: 'turn.started',
       turn_id: turnId,
@@ -341,7 +344,7 @@ export class SessionHost {
       model: `${this.currentModel.providerId}/${this.currentModel.modelId}`,
       mindset,
       authority: this.options.binding.authority,
-    })
+    }).catch(() => undefined)
 
     const usageHandle = this.options.observers.startUsage({ model: this.currentModel, provider: this.provider, cost: this.modelCost })
     let outcome: PromptResult['outcome'] = 'resolved'
@@ -477,7 +480,7 @@ export class SessionHost {
     } else {
       terminal = failureTerminal!
     }
-    this.enqueueAppend(terminal)
+    this.enqueueAppend(terminal).catch(() => undefined)
     await this.flushPersistence()
     // The turn card rides the same append queue AFTER the terminal event, so
     // turns.jsonl can never claim a turn settled before events.jsonl says so.
@@ -510,6 +513,13 @@ export class SessionHost {
   }
 
   async fork(targetSessionId: string): Promise<void> {
+    // F12: refuse a fork onto an occupied target. Failure scenario: a fork
+    // into a session id that already has a transcript silently merges two
+    // conversations (cloneConversation appends/overwrites artifacts) and
+    // desyncs the UI from events.jsonl.
+    if (this.options.store.hasTranscript(targetSessionId)) {
+      throw new Error(`Cannot fork: target session ${targetSessionId} already has a transcript`)
+    }
     const session = this.requiredSession()
     const manager = session.sessionManager
     const leaf = manager.getLeafId()
@@ -572,6 +582,8 @@ export class SessionHost {
     if (typeof event.result !== 'object' || event.result === null) return
     const result = event.result as { tokensBefore?: unknown; estimatedTokensAfter?: unknown }
     const reason = event.reason === 'threshold' || event.reason === 'overflow' ? event.reason : 'manual'
+    // F1: handled fire-and-forget — a manual compact flushes right after, an
+    // automatic one rides its turn's flush; both rethrow via flushPersistence.
     this.enqueueAppend({
       type: 'context.compacted',
       reason,
@@ -581,7 +593,7 @@ export class SessionHost {
       ...(typeof result.estimatedTokensAfter === 'number' && Number.isFinite(result.estimatedTokensAfter)
         ? { tokens_after: Math.max(0, Math.round(result.estimatedTokensAfter)) }
         : {}),
-    })
+    }).catch(() => undefined)
   }
 
   /**
@@ -591,19 +603,31 @@ export class SessionHost {
    * position so callers that must await the commit (e.g. the extension before
    * blocking on an approval) can.
    *
-   * A failed append rejects the chain: persistence errors are loud (the turn
-   * fails) rather than silently dropping the conversation. `flushPersistence`
-   * re-arms the queue after surfacing the error so a later turn can still
-   * write.
+   * Failure model (F1 recovery): each append chains onto the previous
+   * append's SETTLEMENT (either outcome), so one transient append failure can
+   * neither poison the tail — silently skipping every later append for the
+   * binding's life — nor leak its rejection into the utility child, where an
+   * unhandled rejection terminates the process (utility-host.ts exit(1)).
+   * Persistence errors stay LOUD instead: the first failure is recorded and
+   * rethrown by the next flushPersistence(), failing the turn; the queue
+   * itself stays armed for the turn after.
    */
   private enqueueAppend(event: EventInput): Promise<void> {
-    const next = this.persistenceTail.then(() => this.append(event))
-    this.persistenceTail = next
+    const run = () => this.append(event).catch((error: unknown) => {
+      if (!this.persistenceFailure) this.persistenceFailure = error
+      throw error
+    })
+    const next = this.persistenceTail.then(run, run)
+    // The tail never rejects: it only sequences, so an unsettled caller
+    // rejection can never become an unhandled one downstream.
+    this.persistenceTail = next.then(() => undefined, () => undefined)
     return next
   }
 
   private enqueueAppendAct(turnId: string, event: import('../../src/agent/events').ActEvent): void {
-    this.enqueueAppend({ ...event, turn_id: turnId } as EventInput)
+    // Fire-and-forget, but HANDLED (F1): the rejection is re-surfaced loudly
+    // by flushPersistence() at the turn boundary via persistenceFailure.
+    this.enqueueAppend({ ...event, turn_id: turnId } as EventInput).catch(() => undefined)
   }
 
   /**
@@ -634,8 +658,13 @@ export class SessionHost {
         usage,
       }, collector)
       this.nextTurnIndex += 1
-      const next = this.persistenceTail.then(() => this.options.store.appendTurnCard(this.options.binding.sessionId, card))
-      this.persistenceTail = next
+      // F1: chain onto the tail's settlement (either outcome) so a previously
+      // failed append cannot skip the card write, and keep the tail non-rejecting.
+      const next = this.persistenceTail.then(
+        () => this.options.store.appendTurnCard(this.options.binding.sessionId, card),
+        () => this.options.store.appendTurnCard(this.options.binding.sessionId, card),
+      )
+      this.persistenceTail = next.then(() => undefined, () => undefined)
       await this.flushPersistence()
     } catch {
       // A turn never fails because its roadmap card could not be written.
@@ -652,14 +681,12 @@ export class SessionHost {
   }
 
   private async flushPersistence(): Promise<void> {
-    try {
-      await this.persistenceTail
-    } catch (error) {
-      // Re-arm: without this the rejected tail would swallow every future
-      // event for the rest of the binding's life.
-      this.persistenceTail = Promise.resolve()
-      throw error
-    }
+    // Wait for every queued append to settle; the tail itself never rejects
+    // (F1), so this await cannot throw — the failure is delivered explicitly.
+    await this.persistenceTail
+    const failure = this.persistenceFailure
+    this.persistenceFailure = null
+    if (failure !== null) throw failure
   }
 
   private requiredSession(): AgentSession {

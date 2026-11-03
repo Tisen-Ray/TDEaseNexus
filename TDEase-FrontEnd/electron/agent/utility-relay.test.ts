@@ -12,7 +12,7 @@ import type { AgentRuntime } from './agent-runtime'
 import type { UsageLedger } from '../../src/ai/core/usage-ledger'
 import { createAgentRuntimeClient, type AgentChildLike } from './utility-client'
 import { createAgentHost, type HostPort } from './utility-host-core'
-import { clampForRelay, RELAY_STRING_CAP_BYTES, asciiByteLength } from './utility-protocol'
+import { clampForRelay, findRelayClampMarker, RELAY_MESSAGE_CAP_BYTES, RELAY_STRING_CAP_BYTES, asciiByteLength } from './utility-protocol'
 
 /** In-memory ordered port pair: each endpoint delivers to the other's listeners. */
 function createPortPair(): { main: HostPort; child: HostPort } {
@@ -295,14 +295,18 @@ describe('clampForRelay', () => {
     const result = clampForRelay({ rows }, {
       stringCapBytes: 8,
       // Object + key + array overhead eats most of this; the third entry no
-      // longer fits and is degraded (empty or dropped), never silently whole.
+      // longer fits and is degraded (empty, or replaced by the in-band
+      // __relayTruncated marker), never silently whole.
       messageCapBytes: 52,
       byteLength: asciiByteLength,
     })
     expect(result.truncated).toBe(true)
     expect(result.dropped).toBe(false)
-    const kept = (result.value as { rows: string[] }).rows
-    expect(kept.join('').length).toBeLessThan(rows.join('').length)
+    const kept = (result.value as { rows: unknown[] }).rows
+    // Count only surviving string payload — a trailing marker entry is
+    // protocol overhead, not kept data.
+    const keptChars = kept.filter((entry): entry is string => typeof entry === 'string').join('').length
+    expect(keptChars).toBeLessThan(rows.join('').length)
   })
 
   it('passes structured-cloneable exotica (Uint8Array, Date) through verbatim', () => {
@@ -315,12 +319,125 @@ describe('clampForRelay', () => {
   })
 
   it('tombstones a payload it cannot bring under the message cap', () => {
-    const result = clampForRelay({ a: '1' }, {
+    // A typed array passes through the walk verbatim (clamping would corrupt
+    // it), so only the post-walk size check can catch it — replaced wholesale
+    // by the explicit __relayDropped tombstone.
+    const result = clampForRelay({ blob: new Uint8Array(32) }, {
       stringCapBytes: 8,
-      messageCapBytes: 0,
+      messageCapBytes: 40,
       byteLength: asciiByteLength,
     })
     expect(result.dropped).toBe(true)
     expect(result.value).toEqual({ __relayDropped: true })
+  })
+
+  it('appends in-band __relayTruncated markers when a collection tail is dropped, and receivers can detect them (F4)', () => {
+    // Array tail: entries stop being copied once the budget dies — a marker
+    // entry rides in place of the dropped tail.
+    const arrayCut = clampForRelay({ rows: ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'] }, {
+      stringCapBytes: 8,
+      messageCapBytes: 52,
+      byteLength: asciiByteLength,
+    })
+    expect(arrayCut.truncated).toBe(true)
+    expect(arrayCut.dropped).toBe(false)
+    const rows = (arrayCut.value as { rows: unknown[] }).rows
+    expect(rows.at(-1)).toEqual({ __relayTruncated: true })
+    expect(findRelayClampMarker(arrayCut.value)).toBe('__relayTruncated')
+
+    // Object tail: a trailing marker KEY marks the dropped keys.
+    const objectCut = clampForRelay({ a: 'aaaaaaaa', b: 'bbbbbbbb', c: 'cccccccc' }, {
+      stringCapBytes: 8,
+      messageCapBytes: 34,
+      byteLength: asciiByteLength,
+    })
+    expect(objectCut.truncated).toBe(true)
+    expect((objectCut.value as Record<string, unknown>).__relayTruncated).toBe(true)
+    expect(findRelayClampMarker(objectCut.value)).toBe('__relayTruncated')
+
+    // Wholesale tombstone detection, and clean payloads detect nothing.
+    expect(findRelayClampMarker({ __relayDropped: true })).toBe('__relayDropped')
+    expect(findRelayClampMarker({ ok: true, rows: [1, 2, 3] })).toBe(null)
+  })
+
+  it('refuses to dispatch a request whose args carry a clamp marker (F4)', async () => {
+    const runtime = fakeRuntime({ listSubagents: vi.fn(() => []) })
+    const children: Array<ReturnType<typeof spawnFakeHost>> = []
+    const { client } = makeClient(() => {
+      const c = spawnFakeHost(runtime)
+      children.push(c)
+      return c
+    })
+    await client.listSubagents('warmup')
+    expect((runtime.listSubagents as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1)
+
+    // A clamped request (marker in args) must be answered with an error, not
+    // dispatched against corrupt data.
+    const marked = clampForRelay({ rows: ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'] }, {
+      stringCapBytes: 8,
+      messageCapBytes: 52,
+      byteLength: asciiByteLength,
+    })
+    children[0].postMessage({ t: 'req', id: 999, m: 'listSubagents', a: [marked.value] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect((runtime.listSubagents as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1)
+  })
+
+  it('rejects prompt/bindSession whose args were clamped by the relay instead of sending corrupt data (F5)', async () => {
+    const runtime = fakeRuntime()
+    const { client } = makeClient(() => spawnFakeHost(runtime))
+    // > RELAY_MESSAGE_CAP_BYTES of message → clamped → prompt refuses.
+    const huge = 'x'.repeat((RELAY_MESSAGE_CAP_BYTES / 2) + 1024)
+    await expect(client.prompt({ sessionId: 's1', message: huge } as never)).rejects.toThrow(/truncated by the relay clamp/)
+    // A tombstoned payload (giant non-clampable view) rejects for ANY method.
+    const blob = new Uint8Array(RELAY_MESSAGE_CAP_BYTES + 1024)
+    await expect(client.peekSubagent('p', 's', blob as never)).rejects.toThrow(/exceeded the relay message cap/)
+    expect((runtime.prompt as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0)
+  })
+
+  it('settles in-flight ledger rows as aborted when the child exits (F8)', async () => {
+    const runtime = fakeRuntime()
+    const children: Array<ReturnType<typeof spawnFakeHost>> = []
+    const { client, ledgerEvents } = makeClient(() => {
+      const c = spawnFakeHost(runtime)
+      children.push(c)
+      return c
+    })
+    await client.listSubagents('warmup')
+    const handle = children[0].host.ledger.start({ model: { providerId: 'p', modelId: 'm' } })
+    children[0].exit(1)
+    // The never-finished row settles on main's ledger instead of leaking.
+    expect(ledgerEvents).toEqual([
+      { op: 'start', requestId: 'real_1' },
+      { op: 'recordError', requestId: 'real_1', status: 'aborted' },
+    ])
+  })
+
+  it('backs off exponentially and stops respawning after repeated crashes (F6)', async () => {
+    vi.useFakeTimers()
+    try {
+      let spawnCount = 0
+      const children: Array<ReturnType<typeof spawnFakeHost>> = []
+      const runtime = fakeRuntime()
+      const spawn = () => { spawnCount += 1; const c = spawnFakeHost(runtime); children.push(c); return c }
+      const { client } = makeClient(spawn, { respawnDelayMs: 10 })
+      await client.listSubagents('warmup')
+      expect(spawnCount).toBe(1)
+
+      // Crash 5 times in a row without a served response in between: the
+      // respawn delay doubles each cycle (backoff) and the 5th opens the
+      // circuit breaker — no further spawns, calls fail fast.
+      for (let i = 2; i <= 5; i++) {
+        children.at(-1)!.exit(1)
+        await vi.advanceTimersByTimeAsync(120_000)
+        expect(spawnCount).toBe(i)
+      }
+      children.at(-1)!.exit(1)
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(spawnCount).toBe(5)
+      await expect(client.listSubagents('s1')).rejects.toThrow(/crashed repeatedly/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

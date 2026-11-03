@@ -7,12 +7,14 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+import shutil
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _ms1_fixture import graft_parent_ms1  # noqa: E402
+UV = shutil.which("uv") or str(Path.home() / ".local/bin" / "uv")
 
 
 SYSTEM = Path(__file__).resolve().parents[1] / "tdease-ai-capability/system"
@@ -320,7 +322,7 @@ def test_structure_figure_declares_which_chain_was_analyzed(tmp_path):
 
     def run(*extra):
         completed = subprocess.run(
-            ["uv", "run", "--script", str(script), "--pdb", "1tst",
+            [UV, "run", "--script", str(script), "--pdb", "1tst",
              "--cache-dir", str(cache), *extra],
             capture_output=True, text=True)
         payload = (json.loads(completed.stdout) if completed.stdout.strip().startswith("{")
@@ -356,7 +358,7 @@ def test_structure_figure_declares_which_chain_was_analyzed(tmp_path):
     # a tie for longest must not be resolved silently
     _write_two_chain_pdb(cache / "1TIE.pdb", chain_b_length=5)
     tied = subprocess.run(
-        ["uv", "run", "--script", str(script), "--pdb", "1tie",
+        [UV, "run", "--script", str(script), "--pdb", "1tie",
          "--cache-dir", str(cache)],
         capture_output=True, text=True)
     assert tied.returncode == 1
@@ -474,7 +476,7 @@ def test_ms1_feature_ladder_binds_theories_to_features_and_keeps_statistics(tmp_
     ]), encoding="utf-8")
     card_path = tmp_path / "precursor-card.json"
     run = sp.run(
-        ["uv", "run", "--script",
+        [UV, "run", "--script",
          str(SYSTEM / "skills/spectral-evidence/scripts/spectral.py"),
          "measure", "--ms1", "--mzml", str(data / "sample.mzML"),
          "--feature", "f1", "11400.3", "17", "37.7", "37.9",
