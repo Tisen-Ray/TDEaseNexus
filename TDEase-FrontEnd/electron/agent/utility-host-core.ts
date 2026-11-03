@@ -49,6 +49,8 @@ export interface HostMainDeps {
   backendConnection(): Promise<BackendConnection>
   resolveModelMeta?(providerId: string, modelId: string): Promise<unknown>
   nodeCatalogInstaller?(sourceDir: string): Promise<unknown>
+  /** providerId → decrypted safeStorage keys (main-only capability). */
+  credentialKeys?(): Promise<Record<string, string>>
 }
 
 export interface HostLogger {
@@ -72,6 +74,8 @@ export function createAgentHost(options: AgentHostOptions): {
   ledger: UsageLedger
   /** Sync read of the latest backend-connection snapshot. */
   backendConnection: () => BackendConnection
+  /** Sync decrypted-key read (latest credentialKeys snapshot). */
+  credentialKey: (providerId: string) => string | null
   /** Reverse RPC into main-owned state (workspace registry, model metadata…). */
   call(method: AgentDepMethod, args: unknown[]): Promise<unknown>
   attach(runtime: AgentRuntime): { dispose(): void }
@@ -81,6 +85,10 @@ export function createAgentHost(options: AgentHostOptions): {
   let nextCallId = 1
   const pendingCalls = new Map<number, PendingCall>()
   let backendSnapshot: BackendConnection | null = null
+  // Same snapshot pattern as backendSnapshot: refreshed ahead of every host
+  // request so the registry's SYNC resolve() sees the user's latest key edit
+  // (safeStorage lives only in main; the utility child asks, never reads).
+  let credentialSnapshot: Record<string, string> = {}
   let parentSessionOf: ((childSessionId: string) => string | undefined) | null = null
 
   function callMain(method: AgentDepMethod, args: unknown[]): Promise<unknown> {
@@ -94,6 +102,12 @@ export function createAgentHost(options: AgentHostOptions): {
   function refreshBackendConnection(): void {
     void callMain('backendConnection', [])
       .then((snapshot) => { backendSnapshot = snapshot as BackendConnection })
+      .catch(() => undefined)
+  }
+
+  function refreshCredentialKeys(): void {
+    void callMain('credentialKeys', [])
+      .then((snapshot) => { if (snapshot && typeof snapshot === 'object') credentialSnapshot = snapshot as Record<string, string> })
       .catch(() => undefined)
   }
 
@@ -166,8 +180,11 @@ export function createAgentHost(options: AgentHostOptions): {
       if (!message || typeof message !== 'object' || typeof message.t !== 'string') return
       if (message.t === 'req') {
         // Refresh the backend snapshot ahead of every request: bindSession and
-        // run dispatch read it synchronously inside the child.
+        // run dispatch read it synchronously inside the child. Credential keys
+        // ride the same refresh so a Settings key edit applies from the next
+        // turn on, exactly like a plaintext settings.json edit always did.
         refreshBackendConnection()
+        refreshCredentialKeys()
         void dispatch(message.m, message.a)
           .then((value) => respond(message.id, true, value))
           .catch((error: unknown) => respond(message.id, false, error))
@@ -195,6 +212,7 @@ export function createAgentHost(options: AgentHostOptions): {
   // Seed the backend snapshot immediately; until it lands the sync read throws
   // exactly like main's backendConnectionInfo() does before the backend is up.
   refreshBackendConnection()
+  refreshCredentialKeys()
 
   return {
     push,
@@ -203,6 +221,7 @@ export function createAgentHost(options: AgentHostOptions): {
       if (!backendSnapshot) throw new Error('Backend connection is not ready')
       return backendSnapshot
     },
+    credentialKey: (providerId: string) => credentialSnapshot[providerId] ?? null,
     call: callMain,
     attach,
   }

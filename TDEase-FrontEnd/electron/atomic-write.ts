@@ -128,7 +128,10 @@ export function mergeProviderConfig(
   existing: Record<string, unknown> | undefined,
   incoming: Record<string, unknown>,
 ): Record<string, unknown> | null {
-  const hasValue = ["apiKey", "baseUrl", "headers"].some((key) => incoming[key] !== undefined && incoming[key] !== "");
+  // `apiKeyStored` rides the same hasValue bar as a real credential write: it
+  // is what a safeStorage-encrypted key write sends INSTEAD of `apiKey`, and a
+  // key-only write must keep the provider entry (and its frozen models) alive.
+  const hasValue = ["apiKey", "apiKeyStored", "baseUrl", "headers"].some((key) => incoming[key] !== undefined && incoming[key] !== "");
   if (hasValue) return { ...existing, ...incoming };
   const models = existing?.models;
   if (models && typeof models === "object" && !Array.isArray(models) && Object.keys(models).length > 0) {

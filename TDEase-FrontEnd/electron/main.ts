@@ -16,13 +16,13 @@ import crypto from "node:crypto";
 import { BackendManager } from "./backend_manager.cjs";
 import { resolveComponents } from "./component_config.cjs";
 import { ensureRuntimeDirectories, readSettings, resolvedSettings } from "./runtime_config.cjs";
+import { createCredentialStore } from "./credential-store";
 import { createCrashLogger } from "./crash_logger.cjs";
 import { containedPath } from "./path_containment.cjs";
 import { createSystemAssetCatalog } from "./system_asset_catalog.cjs";
 import { reseedNodeCatalog } from "./node_catalog_seed.cjs";
 import { ensureNativeCli, ensurePythonLaunchers, ensureSearchTools, pinSearchToolLookup, resolveVendorGitDirs } from "./skill_runtime.cjs";
 import { newShareToken, type CollabEvent, type ShareConfig, type ShareInvite, type ShareMode, type ShareServer, type ShareTier } from "./share-server";
-import { builtinApiKeyFor, builtinProviderIds } from "./agent/builtin-provider-keys";
 import { createModelCatalogRefresher } from "./agent/model-catalog-refresher";
 import { createProviderAuthService, type ProviderAuthPush } from "./agent/provider-auth";
 import { startUpdater } from "./updater";
@@ -108,28 +108,33 @@ const devUrl = process.env.TDEASE_ELECTRON_DEV_URL || "http://127.0.0.1:1420";
 const isE2E = process.env.TDEASE_E2E === "1";
 const e2eRecreateWindows = process.env.TDEASE_E2E_RECREATE_WINDOWS === "1";
 const e2eDevTools = process.env.TDEASE_E2E_DEVTOOLS === "1";
-// Packaged builds ship a provider seed (resources/backend/settings.seed.json)
-// that pre-fills the DeepSeek key into a fresh settings.json exactly once —
-// only when no settings file exists yet, so user edits always win afterward
-// (see runtime_config.cjs::ensureSettingsFile). Dev runs never seed: the
-// developer's own settings.json must not be silently overwritten.
-const packagedSeedFile = !isDev && process.resourcesPath
-  ? path.join(process.resourcesPath, "backend", "settings.seed.json")
-  : null;
-const providerSeedFile = packagedSeedFile && fs.existsSync(packagedSeedFile) ? packagedSeedFile : null;
+// No bundled provider key ships with the app (2026-11-03 product decision):
+// users configure their own provider keys in Settings. The historical
+// seed-file path (resources/backend/settings.seed.json) is intentionally not
+// consumed anymore.
 const runtimePaths = ensureRuntimeDirectories({
   // Development deliberately shares the repository Backend runtime with the
   // supervised API and Worker. Packaged builds retain their profile-owned root.
   backendRoot: isDev ? path.resolve(__dirname, "..", "..", "data", "backend") : null,
-  providerSeedFile,
 });
 const installedComponents = resolveComponents({ isDev, resourcesPath: process.resourcesPath });
+// safeStorage-backed credential store (electron/credential-store.ts): the ONE
+// place provider API keys and the remote-backend token are encrypted at rest
+// (credentials.json beside settings.json). settings.json keeps at most an
+// `apiKeyStored: true` marker. Main decrypts for its own consumers (registry
+// resolve via the relay snapshot below, model discovery, the remote backend
+// connect) — the renderer only ever sees fingerprints, exactly as before.
+const credentialStore = createCredentialStore(runtimePaths.settingsFile);
+// Reserved credentials.json namespace for the remote-backend bearer token
+// (not a provider; only borrows the same encrypted providers map).
+const BACKEND_TOKEN_ID = "backendConnection.accessToken";
 // Settings-UI model-list refresher: the vendor's own /models listing (with the
 // user's key, read here and never crossing IPC) over a models.dev fallback,
 // TTL-cached under the Client System root. Read-only toward settings.json.
 const modelCatalogRefresher = createModelCatalogRefresher({
   settingsPath: runtimePaths.settingsFile,
   cacheFile: path.join(runtimePaths.systemRoot, "models-cache.json"),
+  credentialLookup: (providerId) => credentialStore.getProviderKey(providerId),
 });
 // OAuth login bridge — the authPath MUST match session-host's ModelRuntime,
 // so a login in Settings authenticates every session. Pushes go only to the
@@ -433,6 +438,12 @@ function getAgentRuntime(): AgentRuntimeClient {
         return workspacePath(entry.local_path);
       },
       backendConnection: () => backendConnectionInfo(),
+      // Decrypted provider keys for the utility runtime's registry: the child
+      // cannot reach safeStorage, so main resolves the effective key per
+      // provider (explicit settings value first — pre-migration plaintext or
+      // a fail-closed fallback install — then the encrypted store) and the
+      // host snapshots the map ahead of every request (utility-host-core).
+      credentialKeys: () => decryptedProviderKeys(),
       // Local Node-catalog installation: Electron main owns the copy because
       // the agent's filesystem reach ends at the Workspace. A remote Backend
       // connection owns its catalog on its own host, so the port is withheld
@@ -503,15 +514,20 @@ ipcMain.handle("settings:read-agent-providers", async () => {
   const settings = readSettings(runtimePaths.settingsFile) || {};
   const providers = (settings.providers ?? {}) as Record<string, Record<string, unknown>>;
   const summary: Record<string, { configured: boolean; name?: string; baseUrl?: string; models?: string[]; credentialFingerprint?: string }> = {};
-  // A build-baked key (builtin-provider-keys.ts) counts as configured: a fresh
-  // install can run the default provider before any user setup. The user's own
-  // settings entry always wins; the fingerprint covers whichever key is
-  // effective so swapping either re-binds the turn session.
-  const ids = new Set([...Object.keys(providers), ...builtinProviderIds()]);
+  // A provider counts as configured only through the user's own settings
+  // entry; no build-baked credential exists anymore. The fingerprint covers
+  // the effective key so swapping it re-binds the turn session.
+  const ids = new Set([...Object.keys(providers)]);
   for (const id of ids) {
     const config = providers[id] ?? {};
+    // Effective key: explicit settings value (pre-migration plaintext, or a
+    // fail-closed fallback install) wins; otherwise the decrypted blob. The
+    // fingerprint covers the EFFECTIVE key, so a config that migrates from
+    // plaintext to the store keeps its fingerprint — turn bindings survive.
     const userKey = config.apiKey ?? config.api_key;
-    const apiKey = (typeof userKey === "string" && userKey.length > 0) ? userKey : builtinApiKeyFor(id);
+    const apiKey = (typeof userKey === "string" && userKey.length > 0)
+      ? userKey
+      : credentialStore.getProviderKey(id) ?? undefined;
     const baseUrl = config.baseUrl ?? config.base_url;
     summary[id] = {
       configured: typeof apiKey === "string" && apiKey.length > 0,
@@ -535,11 +551,44 @@ ipcMain.handle("settings:write-agent-provider", async (_event, providerId: strin
   if (typeof providerId !== "string" || !providerId.trim()) throw new Error("providerId is required");
   if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("provider config must be an object");
   const hasValue = ["apiKey", "baseUrl", "headers"].some((k) => config[k] !== undefined && config[k] !== "");
+  const plainKey = typeof config.apiKey === "string" && config.apiKey.length > 0 ? config.apiKey : null;
+  // Credential-store write path: when safeStorage is available the key lands
+  // encrypted in credentials.json FIRST (credential-store's blob-before-scrub
+  // ordering), and settings.json receives the `apiKeyStored` marker instead of
+  // the secret. When safeStorage is unavailable (Linux without libsecret…),
+  // credential-store is fail-closed by contract — it refuses the write. The
+  // app must keep working, so this caller (not the store) falls back to the
+  // historical plaintext write and says so in the log. Wrapping beats editing
+  // the store's core: its "no plaintext write-back" invariant stays intact.
+  let keyStoredEncrypted = false;
+  if (plainKey && credentialStore.isAvailable()) {
+    try {
+      await credentialStore.storeProviderKey(providerId, plainKey);
+      keyStoredEncrypted = true;
+    } catch (error) {
+      // Blob write failed: fall through to the plaintext write below — losing
+      // the key the user just typed would be far worse than a plaintext one.
+      crashLog.warn("credential-store.provider-key-store-failed", { providerId, error });
+    }
+  } else if (plainKey) {
+    crashLog.warn("credential-store.unavailable-plaintext-fallback", { providerId });
+  } else if (credentialStore.isAvailable()) {
+    // No key in this write (clear or keyless edit): drop any stored blob so a
+    // cleared credential cannot keep resolving from the encrypted store.
+    // Guarded by isAvailable(): when unavailable the blob is unreadable too
+    // (fail-closed reads), so skipping the delete is safe and quiet.
+    await credentialStore.deleteProviderKey(providerId).catch((error: unknown) =>
+      crashLog.warn("credential-store.provider-key-delete-failed", { providerId, error }));
+  }
+  const { apiKey: _stripped, ...keylessConfig } = config;
+  const settingsConfig = plainKey && keyStoredEncrypted
+    ? { ...keylessConfig, apiKeyStored: true }
+    : config;
   // mergeProviderConfig keeps a cleared provider's `models` map alive — the
   // frozen capability digests are model truth, not credential state.
   const written = await updateSettingsFile(runtimePaths.settingsFile, (doc) => {
     const providers = { ...((doc?.providers ?? {}) as Record<string, Record<string, unknown>>) };
-    const merged = mergeProviderConfig(providers[providerId], config);
+    const merged = mergeProviderConfig(providers[providerId], settingsConfig);
     if (merged) providers[providerId] = merged;
     else delete providers[providerId];
     return { ...(doc ?? {}), providers };
@@ -561,6 +610,13 @@ ipcMain.handle("settings:delete-agent-provider", async (_event, providerId: stri
     return { ...(doc ?? {}), providers };
   });
   if (!written && existed) throw new Error("settings.json could not be updated");
+  // The settings entry is gone; drop the encrypted blob with it so a deleted
+  // provider cannot keep resolving (guarded: an unavailable store is already
+  // unreadable, fail-closed, so there is nothing to clean up).
+  if (existed && credentialStore.isAvailable()) {
+    await credentialStore.deleteProviderKey(providerId).catch((error: unknown) =>
+      crashLog.warn("credential-store.provider-key-delete-failed", { providerId, error }));
+  }
   return { ok: true as const, providerId };
 });
 // One model id into providers.<id>.models — sibling-safe (existing metas are
@@ -885,9 +941,33 @@ ipcMain.handle("backend:connection", async () => {
   return backendConnectionInfo();
 });
 
+/** providerId → effective (decrypted) key, for the utility runtime's resolve. */
+function decryptedProviderKeys(): Record<string, string> {
+  const providers = ((readSettings(runtimePaths.settingsFile) ?? {}).providers ?? {}) as Record<string, Record<string, unknown>>;
+  const keys: Record<string, string> = {};
+  for (const [id, config] of Object.entries(providers)) {
+    const plain = config?.apiKey ?? config?.api_key;
+    if (typeof plain === "string" && plain) keys[id] = plain;
+    else {
+      const stored = credentialStore.getProviderKey(id);
+      if (stored) keys[id] = stored;
+    }
+  }
+  return keys;
+}
+
 function backendConnectionInfo() {
   if (backendManager) return backendManager.connectionInfo();
-  if (externalBackendConnection) return externalBackendConnection;
+  if (externalBackendConnection) {
+    // The persisted remote token may live encrypted (startup read happens
+    // before app.whenReady(), where safeStorage is not usable yet); resolve it
+    // lazily here — this is the one seam every main-side remote consumer
+    // (workspace approve/revoke, agent-session clients, the renderer
+    // handshake) goes through. Dev env overrides keep winning via ??.
+    return externalBackendConnection.accessToken
+      ? externalBackendConnection
+      : { ...externalBackendConnection, accessToken: credentialStore.getProviderKey(BACKEND_TOKEN_ID) };
+  }
   throw new Error("Backend connection is not ready");
 }
 
@@ -943,12 +1023,37 @@ ipcMain.handle("backend:configure", async (
     } else if (input?.accessToken === undefined) {
       const persisted = resolvedSettings(runtimePaths.settingsFile)
         .backendConnection as { accessToken?: unknown } | undefined;
-      accessToken = typeof persisted?.accessToken === "string" && persisted.accessToken ? persisted.accessToken : null;
+      // Preservation also consults the encrypted store: post-migration
+      // settings.json carries null while the live token lives in credentials.json.
+      accessToken = typeof persisted?.accessToken === "string" && persisted.accessToken
+        ? persisted.accessToken
+        : credentialStore.getProviderKey(BACKEND_TOKEN_ID);
+    } else {
+      // Explicit empty string clears the token — including the encrypted blob.
+      if (credentialStore.isAvailable()) {
+        await credentialStore.deleteProviderKey(BACKEND_TOKEN_ID).catch((error: unknown) =>
+          crashLog.warn("credential-store.backend-token-delete-failed", error));
+      }
     }
+  }
+  // Same encrypt-first policy as provider keys: the token lands in
+  // credentials.json and settings.json records only "configured" (null) when
+  // safeStorage is available; otherwise the historical plaintext write with a
+  // log line (the app must keep working — see write-agent-provider above).
+  let persistedAccessToken: string | null = accessToken;
+  if (accessToken && credentialStore.isAvailable()) {
+    try {
+      await credentialStore.storeProviderKey(BACKEND_TOKEN_ID, accessToken);
+      persistedAccessToken = null;
+    } catch (error) {
+      crashLog.warn("credential-store.backend-token-store-failed", error);
+    }
+  } else if (accessToken) {
+    crashLog.warn("credential-store.unavailable-plaintext-fallback", { token: BACKEND_TOKEN_ID });
   }
   await updateSettingsFile(runtimePaths.settingsFile, (doc) => ({
     ...(doc ?? {}),
-    backendConnection: { mode, baseUrl, accessToken },
+    backendConnection: { mode, baseUrl, accessToken: persistedAccessToken },
   }));
   if (mode === "remote") {
     externalBackendConnection = { baseUrl, accessToken, agentToken: null };
@@ -1877,6 +1982,29 @@ if (hasSingleInstanceLock) {
   });
   app.whenReady().then(async () => {
     crashLog.info("app.ready");
+    // One-time startup migration of legacy plaintext credentials into the
+    // encrypted store (chosen over piggyback-on-next-write: this actually
+    // removes plaintext from disk promptly, using credential-store's
+    // already-tested blob-before-scrub pass; piggyback would leave plaintext
+    // on disk for as long as the user never re-saves a key). When safeStorage
+    // is unavailable the pass refuses — plaintext stays as the working
+    // fallback and the warning below is the audit trail; next launch retries.
+    void credentialStore.migrateLegacyProviderKeys().catch((error: unknown) =>
+      crashLog.warn("credential-store.migration-skipped", error));
+    void (async () => {
+      const persisted = resolvedSettings(runtimePaths.settingsFile)
+        .backendConnection as { accessToken?: unknown } | undefined;
+      const token = typeof persisted?.accessToken === "string" && persisted.accessToken ? persisted.accessToken : null;
+      if (!token || !credentialStore.isAvailable()) return;
+      try {
+        await credentialStore.storeProviderKey(BACKEND_TOKEN_ID, token);
+        await updateSettingsFile(runtimePaths.settingsFile, (doc) => doc
+          ? { ...doc, backendConnection: { ...(doc.backendConnection as Record<string, unknown> | null ?? {}), accessToken: null } }
+          : null);
+      } catch (error) {
+        crashLog.warn("credential-store.backend-token-migration-failed", error);
+      }
+    })();
     void bootApp().catch((error) => {
       crashLog.error("app.boot-failed", error);
       sendSplash("splash:error", splashErrorEnvelope(error));

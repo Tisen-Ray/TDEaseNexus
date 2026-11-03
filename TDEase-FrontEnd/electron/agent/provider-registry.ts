@@ -1,8 +1,7 @@
 /**
  * Node-side ProviderRegistry: reads the provider catalog + credentials from
- * `<Client System>/settings.json` (`providers`), with a build-baked fallback
- * key per provider (builtin-provider-keys.ts) so packaged builds run the
- * default provider before any user setup.
+ * `<Client System>/settings.json` (`providers`). No build-baked credential
+ * exists: users configure their own provider keys in Settings.
  *
  * This is the one place the apiKey ever lives in memory. The Renderer never
  * sees it: `summarize()` returns only `configured: boolean`, and `resolve()`
@@ -29,7 +28,6 @@ import type {
 } from '../../src/contracts/agent-runtime'
 import { PROVIDERS } from '../../src/services/catalog/provider-definitions'
 import { updateSettingsFile } from '../atomic-write'
-import { builtinApiKeyFor, builtinProviderIds } from './builtin-provider-keys'
 
 import type { ProviderRegistry, ProviderSummary, ResolvedProvider } from './contracts'
 
@@ -57,8 +55,22 @@ interface ProviderConfig {
 /** Sentinel returned when the file is missing/corrupt — treated as "no agent config". */
 const EMPTY_SETTINGS: SettingsFile = {}
 
+/**
+ * Credential seam for safeStorage-backed keys: the agent runtime lives in a
+ * utilityProcess where Electron's safeStorage is unreachable, so main decrypts
+ * credentials.json and hands the plaintext keys in via this sync lookup. A
+ * config carrying a legacy plaintext `apiKey` (pre-migration install, or an OS
+ * without key storage) still wins — the encrypted store only ever ADDS a way
+ * to find a key, never shadows an explicit settings value. Optional so every
+ * non-Electron caller (tests, tooling) keeps today's behavior.
+ */
+export type CredentialKeyLookup = (providerId: string) => string | null
+
 export class NodeProviderRegistry implements ProviderRegistry {
-  constructor(private readonly settingsPath: string) {}
+  constructor(
+    private readonly settingsPath: string,
+    private readonly credentialKey?: CredentialKeyLookup,
+  ) {}
 
   /**
    * Resolve a concrete provider+model for one model call. Throws if the
@@ -73,15 +85,10 @@ export class NodeProviderRegistry implements ProviderRegistry {
    * empty baseUrl reaches Pi's provider registration and is rejected there
    * ("baseUrl is required when defining custom models") for every provider
    * Pi does not natively catalog.
-   *
-   * A build-baked key (builtin-provider-keys.ts) makes a provider resolvable
-   * with NO settings entry at all: the catalog then supplies baseUrl/api and
-   * the built-in key the credential. A user key in settings.json always wins.
    */
   resolve(selector: ModelSelector): ResolvedProvider {
     const config = this.readConfig().providers?.[selector.providerId]
-    const builtinKey = builtinApiKeyFor(selector.providerId)
-    if (!config && !builtinKey) {
+    if (!config) {
       throw new Error(`Provider not configured: ${selector.providerId}`)
     }
     const modelMeta = config?.models?.[selector.modelId]
@@ -93,7 +100,7 @@ export class NodeProviderRegistry implements ProviderRegistry {
       baseUrl: config?.baseUrl ?? config?.base_url ?? catalogBaseUrl ?? '',
       // `apiKey` is intentionally `undefined`-on-absent, not empty-string, so a
       // downstream `if (provider.apiKey)` check works without a length probe.
-      apiKey: config?.apiKey || config?.api_key || builtinKey,
+      apiKey: config?.apiKey || config?.api_key || this.credentialKey?.(selector.providerId) || undefined,
       headers: config?.headers,
       modelMeta,
     }
@@ -116,24 +123,17 @@ export class NodeProviderRegistry implements ProviderRegistry {
           // When a nicer name is added, read it here.
           displayName: config.name || providerId,
           models: config.models ? Object.keys(config.models) : [],
-          configured: Boolean(config.apiKey || config.api_key),
+          configured: Boolean(config.apiKey || config.api_key || this.credentialKey?.(providerId)),
         })
-      }
-    }
-    // Built-in-keyed providers are usable with no settings entry; report them
-    // so summaries describe what can actually run, not just what was written.
-    for (const providerId of builtinProviderIds()) {
-      if (!summaries.some((summary) => summary.providerId === providerId)) {
-        summaries.push({ providerId, displayName: providerId, models: [], configured: true })
       }
     }
     return summaries
   }
 
-  /** True when the selected provider has a non-empty apiKey, user or built-in. */
+  /** True when the selected provider has a non-empty apiKey. */
   isConfigured(selector: ModelSelector): boolean {
     const config = this.readConfig().providers?.[selector.providerId]
-    return Boolean((config && (config.apiKey || config.api_key)) || builtinApiKeyFor(selector.providerId))
+    return Boolean(config && (config.apiKey || config.api_key || this.credentialKey?.(selector.providerId)))
   }
 
   /**

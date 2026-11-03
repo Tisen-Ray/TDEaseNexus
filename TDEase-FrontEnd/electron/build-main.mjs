@@ -79,17 +79,6 @@ const EXTERNAL = [
 
 const watch = process.argv.includes("--watch");
 
-// Built-in provider credentials (see electron/agent/builtin-provider-keys.ts):
-// packaged builds may ship a working default-provider key so the app runs out
-// of the box. The value is inlined into the main + harness bundles at build
-// time from the environment and never reaches the renderer; an unset variable
-// inlines the empty string, i.e. that build carries no built-in key.
-const BUILTIN_KEY_DEFINES = {
-  "process.env.TDEASE_BUILTIN_DEEPSEEK_API_KEY": JSON.stringify(
-    process.env.TDEASE_BUILTIN_DEEPSEEK_API_KEY ?? "",
-  ),
-};
-
 /** @type {esbuild.BuildOptions} */
 const options = {
   entryPoints: [entry],
@@ -105,7 +94,6 @@ const options = {
   // Electron never has to `require()` an ESM package and no second runtime
   // bundle can drift from main.
   external: EXTERNAL,
-  define: BUILTIN_KEY_DEFINES,
   // The Pi package's exports map exposes only . / ./rpc-entry / ./client —
   // its HTTP dispatcher is NOT importable as a subpath. The proxy wiring
   // must reach the SAME undici instance Pi's vendor calls fetch through

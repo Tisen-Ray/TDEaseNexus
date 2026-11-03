@@ -88,7 +88,7 @@ function boot(config: AgentHostInit, parentPort: ParentPort): void {
 
   const host = createAgentHost({ port, logger: crashLog })
 
-  const call = async (method: 'resolveWorkspaceRoot' | 'backendConnection' | 'resolveModelMeta' | 'nodeCatalogInstaller', args: unknown[]) =>
+  const call = async (method: 'resolveWorkspaceRoot' | 'backendConnection' | 'resolveModelMeta' | 'nodeCatalogInstaller' | 'credentialKeys', args: unknown[]) =>
     host.call(method, args)
 
   const runtime: AgentRuntime = createAgentRuntime({
@@ -102,6 +102,8 @@ function boot(config: AgentHostInit, parentPort: ParentPort): void {
     isDev: config.isDev,
     resolveWorkspaceRoot: async (workspaceId) => (await call('resolveWorkspaceRoot', [workspaceId])) as string,
     backendConnection: host.backendConnection,
+    // safeStorage-decrypted provider keys (snapshot-fed; see utility-host-core).
+    credentialKey: host.credentialKey,
     usageLedger: host.ledger,
     resolveModelMeta: async (providerId, modelId) =>
       (await call('resolveModelMeta', [providerId, modelId])) as Awaited<ReturnType<NonNullable<Parameters<typeof createAgentRuntime>[0]['resolveModelMeta']>>>,

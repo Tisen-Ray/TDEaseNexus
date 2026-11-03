@@ -134,6 +134,22 @@ describe('credential-store', () => {
     expect(existsSync(path.join(root, 'credentials.json'))).toBe(false)
   })
 
+  it('fingerprint survives the plaintext→store migration unchanged (computed on the DECRYPTED key)', async () => {
+    // What main's read handler showed pre-migration: sha256[:8] of the
+    // plaintext apiKey in settings.json. After migrateLegacyProviderKeys the
+    // fingerprint comes from the decrypted blob — it must be the same value,
+    // or every existing turn binding would re-bind on upgrade.
+    writeFileSync(settingsPath, legacySettings('sk-fp-stable'), 'utf8')
+    const preMigration = createHash('sha256').update('sk-fp-stable').digest('hex').slice(0, 8)
+    const store = createCredentialStore(settingsPath)
+
+    await store.migrateLegacyProviderKeys()
+
+    expect(store.fingerprint('deepseek')).toBe(preMigration)
+    // And settings.json no longer carries the plaintext the hash was taken from.
+    expect(readFileSync(settingsPath, 'utf8')).not.toContain('sk-fp-stable')
+  })
+
   it('deleteProviderKey removes the blob; reads answer not-configured afterwards', async () => {
     writeFileSync(settingsPath, legacySettings('sk-user-key'), 'utf8')
     const store = createCredentialStore(settingsPath)

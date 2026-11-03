@@ -126,72 +126,68 @@ describe('NodeProviderRegistry.persistModelMeta', () => {
   })
 })
 
-describe('NodeProviderRegistry built-in provider key fallback', () => {
-  // builtin-provider-keys.ts captures process.env at module evaluation, so each
-  // case re-imports the chain under vi.resetModules() with the env stubbed.
+
+describe('NodeProviderRegistry credentialKey seam (safeStorage-backed keys)', () => {
   let root: string
   let settingsPath: string
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), 'tdease-provider-registry-'))
+    root = mkdtempSync(path.join(tmpdir(), 'tdease-provider-registry-cred-'))
     settingsPath = path.join(root, 'settings.json')
-    vi.resetModules()
   })
 
   afterEach(() => {
-    vi.unstubAllEnvs()
     rmSync(root, { recursive: true, force: true })
   })
 
-  async function loadRegistry(): Promise<typeof NodeProviderRegistry> {
-    const module = await import('./provider-registry')
-    return module.NodeProviderRegistry
-  }
-
-  it('resolves a provider with no settings entry from the baked-in key and catalog defaults', async () => {
-    vi.stubEnv('TDEASE_BUILTIN_DEEPSEEK_API_KEY', 'sk-builtin')
-    const Registry = await loadRegistry()
-    const registry = new Registry(settingsPath)
-
-    const resolved = registry.resolve({ providerId: 'deepseek', modelId: 'deepseek-v4-flash' })
-
-    expect(resolved.apiKey).toBe('sk-builtin')
-    expect(resolved.baseUrl).toBe('https://api.deepseek.com')
-    expect(resolved.api).toBe('openai-completions')
-    expect(registry.isConfigured({ providerId: 'deepseek', modelId: 'deepseek-v4-flash' })).toBe(true)
-  })
-
-  it('a user key in settings.json wins over the built-in key', async () => {
-    vi.stubEnv('TDEASE_BUILTIN_DEEPSEEK_API_KEY', 'sk-builtin')
+  it('resolves an encrypted-at-rest config (marker, no plaintext apiKey) through the lookup', () => {
+    // Post-write shape of the safeStorage path: settings.json carries only the
+    // apiKeyStored marker; main hands the decrypted key in via the seam.
     writeFileSync(settingsPath, `${JSON.stringify({
       schemaVersion: 3,
-      providers: { deepseek: { apiKey: 'sk-user' } },
-    })}\n`, 'utf8')
-    const Registry = await loadRegistry()
-    const registry = new Registry(settingsPath)
+      providers: { deepseek: { baseUrl: 'https://api.deepseek.com/v1', apiKeyStored: true } },
+    }, null, 2)}\n`, 'utf8')
 
-    const resolved = registry.resolve({ providerId: 'deepseek', modelId: 'deepseek-v4-flash' })
+    const registry = new NodeProviderRegistry(settingsPath, () => 'sk-decrypted')
 
-    expect(resolved.apiKey).toBe('sk-user')
+    const resolved = registry.resolve({ providerId: 'deepseek', modelId: 'deepseek-chat' })
+    expect(resolved.apiKey).toBe('sk-decrypted')
+    expect(registry.isConfigured({ providerId: 'deepseek', modelId: 'deepseek-chat' })).toBe(true)
+    expect(registry.summarize().find((p) => p.providerId === 'deepseek')?.configured).toBe(true)
   })
 
-  it('without a baked-in key a missing settings entry still throws', async () => {
-    const Registry = await loadRegistry()
-    const registry = new Registry(settingsPath)
+  it('a legacy plaintext config still resolves without any lookup (migration path)', () => {
+    writeFileSync(settingsPath, `${JSON.stringify({
+      schemaVersion: 3,
+      providers: { deepseek: { apiKey: 'sk-legacy-plain' } },
+    }, null, 2)}\n`, 'utf8')
 
-    expect(() => registry.resolve({ providerId: 'deepseek', modelId: 'deepseek-v4-flash' })).toThrow('Provider not configured: deepseek')
-    expect(registry.isConfigured({ providerId: 'deepseek', modelId: 'deepseek-v4-flash' })).toBe(false)
+    const registry = new NodeProviderRegistry(settingsPath)
+
+    expect(registry.resolve({ providerId: 'deepseek', modelId: 'deepseek-chat' }).apiKey).toBe('sk-legacy-plain')
+    expect(registry.isConfigured({ providerId: 'deepseek', modelId: 'deepseek-chat' })).toBe(true)
   })
 
-  it('summarize reports a built-in-keyed provider as configured with no settings entry', async () => {
-    vi.stubEnv('TDEASE_BUILTIN_DEEPSEEK_API_KEY', 'sk-builtin')
-    const Registry = await loadRegistry()
-    const registry = new Registry(settingsPath)
+  it('an explicit settings apiKey wins over the encrypted store (never shadows)', () => {
+    writeFileSync(settingsPath, `${JSON.stringify({
+      schemaVersion: 3,
+      providers: { deepseek: { apiKey: 'sk-from-settings' } },
+    }, null, 2)}\n`, 'utf8')
 
-    const summaries = registry.summarize()
+    const registry = new NodeProviderRegistry(settingsPath, () => 'sk-from-store')
 
-    expect(summaries).toEqual([
-      { providerId: 'deepseek', displayName: 'deepseek', models: [], configured: true },
-    ])
+    expect(registry.resolve({ providerId: 'deepseek', modelId: 'deepseek-chat' }).apiKey).toBe('sk-from-settings')
+  })
+
+  it('a marker-only config with an empty store reads as unconfigured', () => {
+    writeFileSync(settingsPath, `${JSON.stringify({
+      schemaVersion: 3,
+      providers: { deepseek: { apiKeyStored: true } },
+    }, null, 2)}\n`, 'utf8')
+
+    const registry = new NodeProviderRegistry(settingsPath, () => null)
+
+    expect(registry.resolve({ providerId: 'deepseek', modelId: 'deepseek-chat' }).apiKey).toBeUndefined()
+    expect(registry.isConfigured({ providerId: 'deepseek', modelId: 'deepseek-chat' })).toBe(false)
   })
 })

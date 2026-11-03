@@ -46,6 +46,8 @@ export type AgentDepMethod =
   | 'backendConnection'
   | 'resolveModelMeta'
   | 'nodeCatalogInstaller'
+  /** providerId → decrypted safeStorage key map (main owns safeStorage). */
+  | 'credentialKeys'
 
 /** RuntimePush fan-out kinds (see contracts.ts RuntimePush). */
 export type AgentPushKind =

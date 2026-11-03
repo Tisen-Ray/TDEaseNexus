@@ -48,7 +48,7 @@ import { NodeObservers } from './observers'
 import { NodePermissionGateway } from './permission-gateway'
 import { NodePromptPipeline } from './prompt-pipeline'
 import { resolveRunReference } from './mention-resolvers'
-import { NodeProviderRegistry } from './provider-registry'
+import { NodeProviderRegistry, type CredentialKeyLookup } from './provider-registry'
 import { NodeSessionStore } from './session-store'
 import { SessionHost } from './session-host'
 import { createProducedPathLedger } from './tdease-extension'
@@ -89,6 +89,13 @@ export interface AgentRuntimeOptions {
   readonly systemAssets: SystemAssetCatalog
   readonly resolveWorkspaceRoot: (workspaceId: string) => Promise<string>
   readonly backendConnection: () => BackendConnection
+  /**
+   * safeStorage-backed credential lookup (main decrypts, the utility child
+   * cannot): returns the plaintext key for a provider whose key lives in
+   * credentials.json, or null. Optional — absent means settings.json is the
+   * only key source (tests, tooling, pre-migration installs).
+   */
+  readonly credentialKey?: CredentialKeyLookup
   /** Absolute path to the provisioned `tdeasenexus-toolbox` CLI (D16/D12-R). */
   readonly nativeCliPath?: string
   /** Read-only product assets root (skills/, prompts/...); injected into bash as `TDEASE_SYSTEM_ASSETS`. */
@@ -158,6 +165,7 @@ export function createAgentRuntime(options: {
   isDev: boolean
   resolveWorkspaceRoot: (workspaceId: string) => Promise<string>
   backendConnection: () => BackendConnection
+  credentialKey?: CredentialKeyLookup
   nativeCliPath?: string
   push: RuntimePush
   usageLedger?: UsageLedger
@@ -236,7 +244,7 @@ export class AgentRuntime {
   private whitelistQueue: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: AgentRuntimeOptions) {
-    this.providers = new NodeProviderRegistry(options.settingsPath)
+    this.providers = new NodeProviderRegistry(options.settingsPath, options.credentialKey)
     this.systemAssets = createNodeSystemAssets(options.systemAssets)
     const ledger = options.usageLedger ?? createUsageLedger({ storagePath: path.join(options.systemRoot, 'usage-ledger.json') })
     this.observers = new NodeObservers({

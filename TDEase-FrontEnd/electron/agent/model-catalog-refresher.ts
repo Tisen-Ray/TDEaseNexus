@@ -112,6 +112,12 @@ export interface ProviderTestResult {
 export interface ModelCatalogRefresherOptions {
   settingsPath: string
   cacheFile: string
+  /**
+   * safeStorage-backed key lookup (main decrypts credentials.json): used only
+   * when settings.json carries no plaintext `apiKey` for the provider — the
+   * plaintext value always wins, so pre-migration configs behave identically.
+   */
+  credentialLookup?: (providerId: string) => string | null
   fetchImpl?: FetchLike
   now?: () => number
   providerTtlMs?: number
@@ -368,7 +374,7 @@ export function createModelCatalogRefresher(options: ModelCatalogRefresherOption
     const api = config.api ?? def?.defaultApi ?? 'openai-completions'
     const baseUrl = (config.baseUrl ?? config.base_url ?? def?.defaultBaseUrl ?? '').replace(/\/+$/, '')
     if (!baseUrl) return null
-    const apiKey = config.apiKey ?? config.api_key
+    const apiKey = config.apiKey ?? config.api_key ?? options.credentialLookup?.(providerId) ?? undefined
     if (!apiKey && def?.authType !== 'none') return null
 
     if (api === 'openai-completions') {
@@ -527,7 +533,7 @@ export function createModelCatalogRefresher(options: ModelCatalogRefresherOption
     const config = readProviderConfig(await readSettings(), providerId)
     const api = config.api ?? def?.defaultApi ?? 'openai-completions'
     const baseUrl = (config.baseUrl ?? config.base_url ?? def?.defaultBaseUrl ?? '').replace(/\/+$/, '')
-    const apiKey = config.apiKey ?? config.api_key
+    const apiKey = config.apiKey ?? config.api_key ?? options.credentialLookup?.(providerId) ?? undefined
     if (!baseUrl) return untested('no_config')
     if (!apiKey && def?.authType !== 'none') return untested('no_key')
     if (api !== 'openai-completions' && api !== 'anthropic-messages') return untested('unsupported')

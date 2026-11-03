@@ -61,6 +61,8 @@ export interface AgentClientDeps {
   backendConnection(): BackendConnection
   resolveModelMeta?(providerId: string, modelId: string): Promise<AgentModelMetadata | null>
   nodeCatalogInstaller?(sourceDir: string): Promise<NodeInstallOutcome>
+  /** providerId → decrypted safeStorage keys (the child cannot use safeStorage). */
+  credentialKeys?(): Record<string, string>
   /** Main's single ledger instance (usage-ledger:* IPC reads it). */
   usageLedger: UsageLedger
 }
@@ -231,6 +233,10 @@ export function createAgentRuntimeClient(options: AgentClientOptions): AgentRunt
           break
         case 'backendConnection':
           value = deps.backendConnection()
+          break
+        case 'credentialKeys':
+          if (!deps.credentialKeys) throw new Error('credentialKeys is not wired')
+          value = deps.credentialKeys()
           break
         case 'resolveModelMeta':
           if (!deps.resolveModelMeta) throw new Error('resolveModelMeta is not wired')
