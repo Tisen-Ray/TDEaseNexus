@@ -886,5 +886,12 @@
     "hideAgentSidebar": "Hide Agent sidebar",
     "showNavigator": "Show Navigator",
     "hideNavigator": "Hide Navigator"
+  },
+  "workflowDag": {
+    "emptyProjection": "The dry-run returned no job nodes.",
+    "preparing": "Preparing the DAG canvas…",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fitView": "Fit view"
   }
 }

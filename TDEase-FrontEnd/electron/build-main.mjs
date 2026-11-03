@@ -44,6 +44,11 @@ const utilityHostOutput = path.join(outdir, "agent-utility.cjs");
 // Caught by tests/desktop/boots-and-attaches.spec.ts on its first run.
 const preloadSource = path.join(__dirname, "preload.cjs");
 const preloadOutput = path.join(outdir, "preload.cjs");
+// The splash window's minimal preload (see electron/splash-preload.cjs) —
+// built with the same recipe and landed beside main.bundle.cjs, where
+// createSplashWindow() looks for it via `path.join(__dirname, ...)`.
+const splashPreloadSource = path.join(__dirname, "splash-preload.cjs");
+const splashPreloadOutput = path.join(outdir, "splash-preload.cjs");
 const NODE_BUILTINS = [...new Set([
   ...builtinModules,
   ...builtinModules.filter((module) => !module.startsWith("node:")).map((module) => `node:${module}`),
@@ -151,6 +156,12 @@ const preloadOptions = {
   external: ["electron"],
 };
 
+const splashPreloadOptions = {
+  ...preloadOptions,
+  entryPoints: [splashPreloadSource],
+  outfile: splashPreloadOutput,
+};
+
 async function main() {
   if (!fs.existsSync(entry)) {
     console.error(`[build-main] entry not found: ${entry}`);
@@ -164,7 +175,7 @@ async function main() {
 
   if (watch) {
     const contexts = await Promise.all(
-      [options, harnessOptions, utilityHostOptions, preloadOptions].map((opts) => esbuild.context(opts)),
+      [options, harnessOptions, utilityHostOptions, preloadOptions, splashPreloadOptions].map((opts) => esbuild.context(opts)),
     );
     await Promise.all(contexts.map((ctx) => ctx.watch()));
     console.log("[build-main] watching for changes...");
@@ -174,11 +185,12 @@ async function main() {
       esbuild.build(harnessOptions),
       esbuild.build(utilityHostOptions),
       esbuild.build(preloadOptions),
+      esbuild.build(splashPreloadOptions),
     ]);
     patchImportMetaShim(outfile);
     patchImportMetaShim(harnessOutput);
     patchImportMetaShim(utilityHostOutput);
-    for (const out of [outfile, harnessOutput, utilityHostOutput, preloadOutput]) {
+    for (const out of [outfile, harnessOutput, utilityHostOutput, preloadOutput, splashPreloadOutput]) {
       console.log(
         `[build-main] ${path.relative(root, out)} — built (${(fs.statSync(out).size / 1024).toFixed(1)} KB)`,
       );

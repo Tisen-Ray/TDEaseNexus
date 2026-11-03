@@ -51,9 +51,9 @@
       </template>
     </VueFlow>
     <div v-if="ready" class="tdease-dag-toolbar" role="group" aria-label="DAG view controls">
-      <button type="button" title="Zoom in" aria-label="Zoom in" @click="zoomIn()"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" /></svg></button>
-      <button type="button" title="Zoom out" aria-label="Zoom out" @click="zoomOut()"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M5 11h14v2H5z" /></svg></button>
-      <button type="button" title="Fit view" aria-label="Fit view" @click="fitView()"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M4 4h6v2H6v4H4zm16 0v6h-2V6h-4V4zM4 20v-6h2v4h4v2zm16 0h-6v-2h4v-4h2z" /></svg></button>
+      <button type="button" :title="t('workbench.workflowDag.zoomIn')" :aria-label="t('workbench.workflowDag.zoomIn')" @click="zoomIn()"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" /></svg></button>
+      <button type="button" :title="t('workbench.workflowDag.zoomOut')" :aria-label="t('workbench.workflowDag.zoomOut')" @click="zoomOut()"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M5 11h14v2H5z" /></svg></button>
+      <button type="button" :title="t('workbench.workflowDag.fitView')" :aria-label="t('workbench.workflowDag.fitView')" @click="fitView()"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M4 4h6v2H6v4H4zm16 0v6h-2V6h-4V4zM4 20v-6h2v4h4v2zm16 0h-6v-2h4v-4h2z" /></svg></button>
     </div>
     <div v-if="!ready" class="tdease-dag-placeholder">
       <p>{{ placeholderText }}</p>
@@ -63,6 +63,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Handle, Position, useVueFlow, VueFlow } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 import type { DryRunProjection } from '@/studio/ports/backend-gateway'
@@ -80,6 +81,8 @@ const props = defineProps<{
   projection: DryRunProjection
 }>()
 
+const { t } = useI18n()
+
 const mounted = ref(false)
 const supportsMeasurement =
   typeof window !== 'undefined' && typeof window.ResizeObserver !== 'undefined'
@@ -87,8 +90,8 @@ const ready = computed(
   () => mounted.value && supportsMeasurement && layout.value.nodes.length > 0)
 const placeholderText = computed(() =>
   layout.value.nodes.length === 0
-    ? 'dry-run 未返回任何任务节点。'
-    : '正在准备 DAG 画布…')
+    ? t('workbench.workflowDag.emptyProjection')
+    : t('workbench.workflowDag.preparing'))
 
 /**
  * The workbench's deterministic layered layout, ported verbatim: Kahn depth

@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Content-Security-Policy. Sources reflect what the renderer actually
+      loads: the app's own origin (dev server or file:), the local Backend on
+      127.0.0.1/localhost (http fetch + ws), blob:/data: images and object
+      URLs (media preview, thumbnails), blob: workers and blob: iframe
+      documents (workspace HTML preview), data: fonts, and inline styles
+      (Vue's runtime style injection). The theme-bootstrap inline script below
+      is pinned by sha256 hash rather than 'unsafe-inline'.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+/FCzhyca3Ac5x7B0JgZbVwsTlEZDVhOCG42iRw+RBI='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'" />
     <title>TDEaseNexus · TD通</title>
 
     <!--

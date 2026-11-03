@@ -19,7 +19,7 @@ function makeHandlers() {
 describe('buildSlashRegistry', () => {
   it('builds exactly the implemented commands, each with a run', () => {
     const registry = buildSlashRegistry(t, makeHandlers())
-    expect(registry.map((cmd) => cmd.name)).toEqual(['new', 'fork', 'compact', 'export', 'stop', 'mcp'])
+    expect(registry.map((cmd) => cmd.name)).toEqual(['new', 'fork', 'compact', 'export', 'stop'])
     for (const cmd of registry) {
       expect(typeof cmd.run).toBe('function')
       expect(cmd.description).toBeTruthy()
@@ -29,6 +29,8 @@ describe('buildSlashRegistry', () => {
     expect(findSlashCommand(registry, 'reset')).toBeUndefined()
     // Skills are bound through the `$` picker now, not a slash command.
     expect(findSlashCommand(registry, 'skill')).toBeUndefined()
+    // MCP has no real wiring yet (no @-mention kind), so it is not advertised.
+    expect(findSlashCommand(registry, 'mcp')).toBeUndefined()
   })
 
   it('finds commands by name, case-insensitively, and by alias', () => {
@@ -46,11 +48,10 @@ describe('buildSlashRegistry', () => {
     findSlashCommand(registry, 'new')?.run('')
     findSlashCommand(registry, 'stop')?.run('')
     findSlashCommand(registry, 'export')?.run('pdf')
-    findSlashCommand(registry, 'mcp')?.run('firecrawl')
     expect(handlers.newSession).toHaveBeenCalledOnce()
     expect(handlers.stop).toHaveBeenCalledOnce()
     expect(handlers.exportConversation).toHaveBeenCalledWith('pdf')
-    expect(handlers.useMcp).toHaveBeenCalledWith('firecrawl')
+    expect(handlers.useMcp).not.toHaveBeenCalled()
     expect(handlers.fork).not.toHaveBeenCalled()
   })
 })
@@ -60,7 +61,7 @@ describe('slashCommandRowLabel', () => {
   // (the old bare-name fallback rendered `/compact compact`).
   it('reduces a full usage to its argument hint, and falls back to aliases or empty', () => {
     expect(slashCommandRowLabel({ name: 'export', usage: '/export [pdf]' } as SlashCommandDef)).toBe('[pdf]')
-    expect(slashCommandRowLabel({ name: 'mcp', usage: '/mcp <server>' } as SlashCommandDef)).toBe('<server>')
+    expect(slashCommandRowLabel({ name: 'fork', usage: '/fork session' } as SlashCommandDef)).toBe('session')
     expect(slashCommandRowLabel({ name: 'stop', aliases: ['abort'] } as SlashCommandDef)).toBe('(abort)')
     expect(slashCommandRowLabel({ name: 'compact' } as SlashCommandDef)).toBe('')
   })

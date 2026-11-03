@@ -226,7 +226,10 @@
 <script>
 (function(){
   "use strict";
-  const { ipcRenderer } = require("electron");
+  // Same API shape as the old `require("electron").ipcRenderer`, but scoped to
+  // the allow-listed splash channels exposed by splash-preload.cjs — the window
+  // now runs sandboxed with contextIsolation on.
+  const ipcRenderer = window.tdeaseSplash;
 
   const NS='http://www.w3.org/2000/svg';
   const svg=document.getElementById('spec');

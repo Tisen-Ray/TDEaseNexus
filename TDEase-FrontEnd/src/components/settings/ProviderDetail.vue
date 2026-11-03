@@ -168,7 +168,6 @@
         </div>
       </div>
     </div>
-    <p v-else-if="provider.authType === 'oauth'" class="pv-note">{{ t('workbench.settings.providers.oauthUnsupported') }}</p>
 
     <!-- Models. A fresh custom provider has zero models — the manual entry
          below must stay reachable, hence the custom branch in the condition. -->

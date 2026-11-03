@@ -886,5 +886,12 @@
     "hideAgentSidebar": "收起 Agent 侧栏",
     "showNavigator": "展开导航栏",
     "hideNavigator": "收起导航栏"
+  },
+  "workflowDag": {
+    "emptyProjection": "dry-run 未返回任何任务节点。",
+    "preparing": "正在准备 DAG 画布…",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fitView": "适应视图"
   }
 }

@@ -26,6 +26,7 @@
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PlotlyModule from 'plotly.js-dist-min'
+import { plotlyBaseLayout } from '@/services/visualization/plotlyTheme'
 import type { Dataset, SelectionState } from '@/types/visualization'
 
 const { t } = useI18n()
@@ -104,11 +105,28 @@ const figure = computed<PlotlyFigure>(() => {
 
 const plotData = computed(() => figure.value.data ?? [])
 const inputRows = computed(() => rowsFromInput(Array.isArray(props.datasets) ? props.datasets : [], props.data))
-const plotLayout = computed<Record<string, unknown>>(() => ({
-  autosize: true,
-  margin: { l: 56, r: 24, t: 40, b: 48 },
-  ...(figure.value.layout ?? {}),
-}))
+/**
+ * Deep-merge plain layout records (later sources win; arrays replace whole).
+ * The shared theme (paper_bg/font/margins) provides the defaults and the
+ * backend figure's explicit keys override them, including nested axis/font
+ * objects — a plain spread would let `font` clobber the whole theme font.
+ */
+function mergeLayouts(...sources: Array<Record<string, unknown>>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const source of sources) {
+    for (const [key, value] of Object.entries(source)) {
+      const prev = out[key]
+      out[key] = isRecord(prev) && isRecord(value) ? mergeLayouts(prev, value) : value
+    }
+  }
+  return out
+}
+
+const plotLayout = computed<Record<string, unknown>>(() => mergeLayouts(
+  { autosize: true },
+  plotlyBaseLayout(),
+  figure.value.layout ?? {},
+))
 const plotConfig = computed<Record<string, unknown>>(() => ({
   responsive: true,
   displaylogo: false,

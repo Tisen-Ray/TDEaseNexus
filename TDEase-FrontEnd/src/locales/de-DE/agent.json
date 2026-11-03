@@ -250,8 +250,7 @@
   "slash": {
     "compact": "Sitzungsverlauf zusammenfassen, um Kontext zurückzugewinnen",
     "export": "Diese Konversation als eigenständiges HTML (Standard) oder PDF exportieren — wird nach exports/ geschrieben und geöffnet",
-    "localMcpServer": "Lokaler MCP-Server · {name}",
-    "useMcp": "Einen lokal konfigurierten MCP-Server verwenden"
+    "localMcpServer": "Lokaler MCP-Server · {name}"
   },
   "completion": {
     "hint": "↑↓ auswählen · Tab vervollständigen · Enter bestätigen · Esc schließen",

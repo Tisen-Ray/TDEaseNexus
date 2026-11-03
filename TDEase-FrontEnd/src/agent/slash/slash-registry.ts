@@ -75,13 +75,6 @@ export function buildSlashRegistry(
       permission: 'owner',
       run: () => handlers.stop(),
     },
-    {
-      name: 'mcp',
-      description: t('agent.slash.useMcp'),
-      usage: '/mcp <server>',
-      permission: 'owner',
-      run: (args) => handlers.useMcp?.(args.trim()),
-    },
   ]
 }
 

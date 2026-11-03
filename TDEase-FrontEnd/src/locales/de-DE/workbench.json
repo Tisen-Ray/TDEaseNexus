@@ -886,5 +886,12 @@
     "hideAgentSidebar": "Agent-Seitenleiste ausblenden",
     "showNavigator": "Navigator anzeigen",
     "hideNavigator": "Navigator ausblenden"
+  },
+  "workflowDag": {
+    "emptyProjection": "Der Probelauf (dry-run) hat keine Job-Knoten zurückgegeben.",
+    "preparing": "DAG-Leinwand wird vorbereitet…",
+    "zoomIn": "Vergrößern",
+    "zoomOut": "Verkleinern",
+    "fitView": "Ansicht einpassen"
   }
 }

@@ -825,9 +825,14 @@ async function createSplashWindow() {
     backgroundColor: "#F7F5F2",
     icon: appIcon,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      sandbox: false,
+      // Plain sandboxed window: no Node in the renderer. The splash's few IPC
+      // channels (progress/error events, retry/quit/open-logs) are exposed via
+      // a minimal contextBridge preload — electron/splash-preload.cjs — instead
+      // of nodeIntegration, so a compromised splash page gets nothing else.
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, "splash-preload.cjs"),
     },
   });
   await splashWindow.loadFile(splashHtml);
@@ -1186,6 +1191,13 @@ ipcMain.handle("workspace:pick-directory", async () => {
 function workspacePath(root: string, relative = "."): string {
   return workspaceRegistry.workspacePath(runtimePaths.workspaceRegistryFile, root, relative);
 }
+// Raw-absolute-path variant for the few handlers that take a bare path
+// (show-in-folder, open-external, copy-into sources): the canonical path must
+// sit inside SOME registered Workspace root — the same registry membership
+// every other `workspace:*` handler is gated on.
+function registeredWorkspacePath(absPath: string): string {
+  return workspaceRegistry.registeredWorkspacePath(runtimePaths.workspaceRegistryFile, absPath);
+}
 
 ipcMain.handle("workspace:mkdir", (_event, root: string, relative: string) => fsp.mkdir(workspacePath(root, relative), { recursive: true }));
 ipcMain.handle("workspace:exists", async (_event, root: string, relative: string) => {
@@ -1296,8 +1308,14 @@ ipcMain.handle("workspace:trash", async (_event, root: string, rel: string) => {
 });
 ipcMain.handle("workspace:move", (_event, root: string, srcRels: string[], destDirRel: string) =>
   moveWorkspaceEntries(root, srcRels, destDirRel, workspacePath));
-ipcMain.handle("workspace:copy-into", (_event, root: string, absSrcPaths: string[], destDirRel: string) =>
-  copyIntoWorkspace(root, absSrcPaths, destDirRel, workspacePath));
+ipcMain.handle("workspace:copy-into", (_event, root: string, absSrcPaths: string[], destDirRel: string) => {
+  // Sources are deliberately NOT registry-gated: OS drag-drop import of host
+  // files into a Workspace and outside-workspace attachment import are product
+  // features. A compromised renderer can exfiltrate arbitrary host files
+  // through this channel — the durable fix is expressing user drag intent via
+  // webUtils.getPathForFile in the renderer, not an allowlist here.
+  return copyIntoWorkspace(root, absSrcPaths, destDirRel, workspacePath);
+});
 // Recursive copy to an EXACT destination path (unlike copy-into, which
 // preserves the source basename). The renderer computes a collision-free
 // name before calling, so `force` never silently overwrites a user entry.
@@ -1327,12 +1345,14 @@ ipcMain.handle("workspace:list-dir", async (_event, root: string, rel: string) =
   return result;
 });
 ipcMain.handle("workspace:show-in-folder", (_event, absPath: string) => {
-  if (!path.isAbsolute(absPath)) throw new Error("show-in-folder requires absolute path");
-  shell.showItemInFolder(absPath);
+  // Registry containment, not just "is absolute": an arbitrary host path
+  // must not be revealable from a compromised renderer.
+  const contained = registeredWorkspacePath(absPath);
+  shell.showItemInFolder(contained);
 });
 ipcMain.handle("workspace:open-external", async (_event, absPath: string) => {
-  if (!path.isAbsolute(absPath)) throw new Error("open-external requires absolute path");
-  return shell.openPath(absPath);
+  const contained = registeredWorkspacePath(absPath);
+  return shell.openPath(contained);
 });
 ipcMain.handle("workspace:reveal-path", (_event, root: string, rel: string) => {
   shell.showItemInFolder(workspacePath(root, rel));
@@ -1400,10 +1420,17 @@ type WatchStartOptions = { ignored?: string[] };
 
 ipcMain.handle("workspace:watch-start", async (event, root: string, opts?: WatchStartOptions) => {
   if (!chokidar) return { ok: false, error: "chokidar unavailable" };
-  if (!path.isAbsolute(root)) return { ok: false, error: "root must be absolute" };
-  let entry = watchers.get(root);
+  // Same registry gatekeeper as every other `workspace:*` handler: the
+  // canonical root must be a registered Workspace. A bare isAbsolute check
+  // let a compromised renderer point a file watcher at any host directory.
+  let resolvedRoot: string;
+  try {
+    resolvedRoot = workspacePath(root);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+  let entry = watchers.get(resolvedRoot);
   if (!entry) {
-    const resolvedRoot = path.resolve(root);
     // Union, deduped. Note the watcher for a root is created once and then
     // shared by refcount, so later subscribers do not re-negotiate `ignored`;
     // that is safe precisely because the derived contract floor is unconditional.
@@ -1448,7 +1475,7 @@ ipcMain.handle("workspace:watch-start", async (event, root: string, opts?: Watch
     });
     const baseEntry = { watcher, refCount: 0, subscribers: new Set<Electron.WebContents>() as Set<Electron.WebContents> };
     entry = baseEntry;
-    watchers.set(root, entry);
+    watchers.set(resolvedRoot, entry);
     await new Promise<void>((resolve) => {
       watcher.once("ready", () => {
         // Cancel nothing: a final flush after ready keeps pre-ready events.
@@ -1469,7 +1496,7 @@ ipcMain.handle("workspace:watch-start", async (event, root: string, opts?: Watch
   return { ok: true };
 });
 ipcMain.handle("workspace:watch-stop", async (event, root: string) => {
-  const entry = watchers.get(root);
+  const entry = watchers.get(path.resolve(root));
   if (!entry) return { ok: true };
   if (entry.subscribers.delete(event.sender)) {
     entry.refCount = Math.max(0, entry.refCount - 1);
@@ -1532,6 +1559,23 @@ function createMainWindow() {
       /* not an absolute URL — deny */
     }
     return { action: "deny" };
+  });
+
+  // Navigation guard: the main window may never navigate away from the app's
+  // own origin (dev server or file:). Without this, an injected link/form or a
+  // renderer compromise could sail the whole window — preload included — to an
+  // attacker-controlled page.
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    let allowed = false;
+    try {
+      const target = new URL(url);
+      const current = mainWindow!.webContents.getURL();
+      const origin = current ? new URL(current).origin : target.origin;
+      allowed = target.origin === origin;
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) event.preventDefault();
   });
 
   mainWindow.on("close", (e) => {

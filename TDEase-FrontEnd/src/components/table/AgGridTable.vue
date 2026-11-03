@@ -146,7 +146,7 @@ const emit = defineEmits<{
   cellClicked: [{ colId: string; value: unknown; data: Record<string, unknown> }]
 }>()
 
-type XLSXModule = typeof import('xlsx')
+type ExcelJSModule = typeof import('exceljs')
 
 const gridRef = ref<any>(null)
 const rootEl = ref<HTMLElement | null>(null)
@@ -367,7 +367,7 @@ function exportExcel() {
 
 async function exportExcelAsync() {
   const baseName = exportOptions.value.fileBaseName
-  const XLSX: XLSXModule = await import('xlsx')
+  const ExcelJS: ExcelJSModule = await import('exceljs')
 
   const columns = props.columnDefs
     .map((c) => ({ field: String(c.field || ''), headerName: String(c.headerName || c.field || '') }))
@@ -383,27 +383,37 @@ async function exportExcelAsync() {
     ? allRows.filter((row, idx) => isRowSelected(row, idx))
     : allRows
 
-  // json_to_sheet over every row is one uninterrupted O(rows) task (hundreds
-  // of ms of frozen UI at 100k+ rows). sheet_add_aoa in chunks with a
-  // macrotask yield between them keeps the UI painting during assembly; the
-  // resulting sheet is byte-identical (values in header order, null/undefined
-  // cells skipped). The final writeFile stays synchronous — streaming it
-  // would need a worker, out of scope here.
+  // Building the sheet row by row is one uninterrupted O(rows) task (hundreds
+  // of ms of frozen UI at 100k+ rows). addRows in chunks with a macrotask
+  // yield between them keeps the UI painting during assembly. Values land in
+  // header order; null/undefined cells export as empty cells, matching the
+  // previous aoa_to_sheet/sheet_add_aoa output.
   const YIELD_EVERY_ROWS = 5000
-  const ws = XLSX.utils.aoa_to_sheet([columns.map((c) => c.headerName)])
+  const workbook = new ExcelJS.Workbook()
+  const ws = workbook.addWorksheet('Sheet1')
+  ws.addRow(columns.map((c) => c.headerName))
   for (let start = 0; start < rowsToExport.length; start += YIELD_EVERY_ROWS) {
     const chunk = rowsToExport
       .slice(start, start + YIELD_EVERY_ROWS)
-      .map((row) => columns.map((c) => row[c.field]))
-    XLSX.utils.sheet_add_aoa(ws, chunk, { origin: -1 })
+      .map((row) => columns.map((c) => row[c.field] ?? null))
+    ws.addRows(chunk)
     if (start + YIELD_EVERY_ROWS < rowsToExport.length) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
     }
   }
 
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
-  XLSX.writeFile(wb, `${baseName}.xlsx`)
+  // writeFile downloaded synchronously; exceljs only serializes to a buffer,
+  // so the same download is driven from a Blob URL here.
+  const buffer = await workbook.xlsx.writeBuffer()
+  const blob = new Blob([buffer as ArrayBuffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${baseName}.xlsx`
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 watch(

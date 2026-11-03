@@ -250,8 +250,7 @@
   "slash": {
     "compact": "Summarize the session history to reclaim context",
     "export": "Export this conversation as standalone HTML (default) or PDF — written to exports/ and opened",
-    "localMcpServer": "Local MCP server · {name}",
-    "useMcp": "Use a locally configured MCP server"
+    "localMcpServer": "Local MCP server · {name}"
   },
   "completion": {
     "hint": "↑↓ select · Tab complete · Enter confirm · Esc close",

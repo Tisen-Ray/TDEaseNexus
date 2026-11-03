@@ -250,8 +250,7 @@
   "slash": {
     "compact": "压缩会话历史以腾出上下文",
     "export": "导出当前对话为独立 HTML（默认）或 PDF 文件，写入 exports/ 并打开",
-    "localMcpServer": "本地 MCP 服务 · {name}",
-    "useMcp": "使用本地已配置的 MCP 服务"
+    "localMcpServer": "本地 MCP 服务 · {name}"
   },
   "completion": {
     "hint": "↑↓ 选择 · Tab 补全 · Enter 确认 · Esc 关闭",

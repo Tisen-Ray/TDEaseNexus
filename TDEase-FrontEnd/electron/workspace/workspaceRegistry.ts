@@ -119,6 +119,30 @@ export async function revokeWorkspaceRootWithBackend(
   }
 }
 
+// Absolute-path variant of the gatekeeper for the few IPC that take a raw
+// absolute path instead of (root, relative): the path must sit inside SOME
+// registered Workspace root (the root itself counts). Same fail-closed
+// registry read as `workspacePath` below.
+export function registeredWorkspacePath(registryFile: string, absPath: string): string {
+  if (!path.isAbsolute(absPath)) throw new Error("path must be absolute");
+  const resolved = path.resolve(absPath);
+  let workspaces: unknown[] = [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(registryFile, "utf8")) as { workspaces?: unknown[] } | null;
+    if (Array.isArray(parsed?.workspaces)) workspaces = parsed.workspaces;
+  } catch {
+    // Unreadable registry ⇒ nothing registered ⇒ membership fails closed.
+  }
+  const contained = workspaces.some((entry) => {
+    const localPath = (entry as WorkspaceRegistryEntry | undefined)?.local_path;
+    if (typeof localPath !== "string") return false;
+    const root = path.resolve(localPath);
+    return resolved === root || resolved.startsWith(root + path.sep);
+  });
+  if (!contained) throw new Error("path is outside every registered workspace");
+  return resolved;
+}
+
 // The gatekeeper for every `workspace:*` IPC: the root must be absolute AND a
 // registered Workspace (canonical-path membership in the registry file), and
 // the relative part must stay contained. Checked ONLY against the local

@@ -58,6 +58,21 @@ function peekSelected(): void {
   if (selectedId.value) void store.peek(selectedId.value)
 }
 
+/** Findings are free-form (`unknown[]` per the report-back contract): render
+ *  strings as-is, objects through their text-ish field, the rest as compact
+ *  JSON — same quiet list voice as openQuestions/evidence above. */
+function findingText(finding: unknown): string {
+  if (typeof finding === 'string') return finding
+  if (finding && typeof finding === 'object') {
+    const rec = finding as Record<string, unknown>
+    for (const key of ['text', 'summary', 'title', 'description']) {
+      const value = rec[key]
+      if (typeof value === 'string' && value.trim()) return value
+    }
+  }
+  return JSON.stringify(finding)
+}
+
 // Auto-peek when a running run is selected, so the panel shows live progress.
 watch(selectedId, (id) => { if (id) void store.peek(id) })
 </script>
@@ -122,7 +137,11 @@ watch(selectedId, (id) => { if (id) void store.peek(id) })
           </div>
           <div v-if="selected.result.findings.length" class="subagent-panel__envelope-row">
             <dt>{{ t('agent.subagent.findings', 'findings') }}</dt>
-            <dd><pre class="subagent-panel__json">{{ JSON.stringify(selected.result.findings, null, 2) }}</pre></dd>
+            <dd>
+              <ul class="subagent-panel__questions">
+                <li v-for="(finding, i) in selected.result.findings" :key="i">{{ findingText(finding) }}</li>
+              </ul>
+            </dd>
           </div>
           <div v-if="selected.result.evidenceLinks.length" class="subagent-panel__envelope-row">
             <dt>{{ t('agent.subagent.evidence', 'evidence') }}</dt>
@@ -228,11 +247,6 @@ watch(selectedId, (id) => { if (id) void store.peek(id) })
 .subagent-panel__envelope-row { display: flex; flex-direction: column; gap: 2px; }
 .subagent-panel__envelope-row dt { font-size: var(--text-label); text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
 .subagent-panel__envelope-row dd { margin: 0; }
-.subagent-panel__json {
-  margin: 0; padding: var(--space-2); max-height: 240px; overflow: auto;
-  background: var(--color-bg-secondary); border-radius: var(--radius-sm);
-  font-family: var(--font-mono); font-size: var(--text-mono); white-space: pre-wrap; word-break: break-word;
-}
 .subagent-panel__link {
   display: inline-block; margin: 0 var(--space-1) var(--space-1) 0;
   padding: 1px var(--space-1); border-radius: var(--radius-sm);
