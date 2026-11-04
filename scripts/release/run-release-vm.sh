@@ -106,7 +106,10 @@ vm "pwsh -NoProfile -ExecutionPolicy Bypass -File \"${VM_REPO}/scripts/release/b
 
 if [ "$VERIFY" -eq 1 ]; then
     echo "--- verify install (launch-once + audit) ---"
-    vm "pwsh -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process '${VM_REPO}/.scratch/electron-installed/TDEaseNexus.exe'; Start-Sleep -Seconds 40; Get-Process TDEaseNexus -ErrorAction SilentlyContinue | Stop-Process -Force\""
+    # First run unpacks a ~350MB node seed and provisions the backend venv;
+    # a fixed sleep cut it short (verify saw a half-provisioned data root).
+    # Poll for the catalog marker instead, then stop the app.
+    vm "pwsh -NoProfile -Command \"Start-Process '${VM_REPO}/.scratch/electron-installed/TDEaseNexus.exe'; \$deadline = (Get-Date).AddMinutes(8); \$marker = '${VM_REPO}/.scratch/TDEaseNexus-Data/backend/nodes/_template/rules.smk'; while ((Get-Date) -lt \$deadline -and -not (Test-Path \$marker)) { Start-Sleep -Seconds 5 }; Start-Sleep -Seconds 20; Get-Process TDEaseNexus -ErrorAction SilentlyContinue | Stop-Process -Force\""
     vm "pwsh -NoProfile -ExecutionPolicy Bypass -File \"${VM_REPO}/scripts/release/verify-install.ps1\""
     vm "pwsh -NoProfile -ExecutionPolicy Bypass -File \"${VM_REPO}/scripts/release/verify-install.ps1 -EngineSmoke\""
 fi

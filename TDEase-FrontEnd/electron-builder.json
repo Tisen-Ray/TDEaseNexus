@@ -9,6 +9,7 @@
     "output": "release"
   },
   "electronDist": "../.scratch/electron-dist",
+  "afterPack": "scripts/after-pack.cjs",
   "npmRebuild": false,
   "files": [
     "dist/**",
@@ -210,7 +211,9 @@
   "asarUnpack": [
     "**/node_modules/node-pty/**",
     "**/node_modules/koffi/**",
-    "**/node_modules/@koromix/koffi-*/**"
+    "**/node_modules/@koromix/koffi-*/**",
+    "**/node_modules/@node-rs/**",
+    "**/node_modules/@mariozechner/**"
   ],
   "publish": [
     {
