@@ -62,11 +62,11 @@ const EXTERNAL = [
   "electron",
   "chokidar",
   "electron-updater",
-  // `extract-zip` is CommonJS and reaches Node built-ins such as `tty`.
+  // `yauzl-promise` is CommonJS and reaches Node built-ins such as `tty`.
   // Keeping it external lets Node load it with its native CommonJS resolver
   // instead of emitting esbuild's unsupported dynamic-require shim in the
   // ESM Pi runtime.
-  "extract-zip",
+  "yauzl-promise",
   // `node-pty` is a native module (build/Release/pty.node + conpty.dll) — it
   // can never be bundled; Electron must resolve it from node_modules at
   // runtime, and electron-builder unpacks it from asar (asarUnpack).

@@ -29,7 +29,8 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const extractZip = require("extract-zip");
+const { pipeline } = require("node:stream/promises");
+const yauzl = require("yauzl-promise");
 
 const MANIFEST_NAME = ".seed-manifest.json";
 const TEMP_DIR_NAME = ".nodes-seed-tmp";
@@ -77,13 +78,36 @@ function discardSeed(zipFile) {
 }
 
 /**
- * Default extractor: a real zip reader (`extract-zip`, a production dependency),
- * not the host's tar. bsdtar reads zip on Windows/macOS but GNU tar on Linux
- * cannot, and a packaged app may not have `unzip` either — the seed must unpack
- * the same way on every supported platform.
+ * Default extractor: `yauzl-promise` (extract-zip is unmaintained; its two
+ * symlink advisories have no patched release). The packer refuses symlinks
+ * outright, so entries are strictly files and directories. Path traversal is
+ * doubly blocked: yauzl validates entry names by default (validateFilenames),
+ * and each resolved target is checked to stay inside the destination.
  */
-function defaultExtract(zipFile, destDir) {
-  return extractZip(path.resolve(zipFile), { dir: path.resolve(destDir) });
+async function defaultExtract(zipFile, destDir) {
+  const dest = path.resolve(destDir);
+  const zip = await yauzl.open(path.resolve(zipFile));
+  try {
+    for await (const entry of zip) {
+      const name = entry.filename;
+      const target = path.join(dest, name);
+      if (target !== dest && !target.startsWith(dest + path.sep)) {
+        throw new Error(`zip entry escapes the destination: ${name}`);
+      }
+      if (name.endsWith("/")) {
+        fs.mkdirSync(target, { recursive: true });
+        continue;
+      }
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      // Unix mode rides in the high word of the external attributes (the
+      // packer writes it so the executable bit survives); entries without
+      // unix attrs get the usual 0666-and-umask default.
+      const mode = (entry.externalFileAttributes >>> 16) & 0o7777;
+      await pipeline(await entry.openReadStream(), fs.createWriteStream(target, { mode: mode || 0o666 }));
+    }
+  } finally {
+    await zip.close();
+  }
 }
 
 /**
