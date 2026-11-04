@@ -41,7 +41,7 @@ Prerequisites: Node `>=24.12 <25` + pnpm 10, Python 3.11+ with
 [uv](https://docs.astral.sh/uv/), Rust >= 1.97.
 
 ```bash
-git clone --recurse-submodules https://github.com/Computational-TDMS/TDEaseNexus.git
+git clone --recurse-submodules https://github.com/Tisen-Ray/TDEaseNexus.git
 cd TDEaseNexus
 
 # Frontend (TDEase-FrontEnd/)
