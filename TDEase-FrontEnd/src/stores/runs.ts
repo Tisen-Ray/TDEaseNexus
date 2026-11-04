@@ -47,6 +47,13 @@ export const useRunsStore = defineStore('runs', () => {
   let gateway: BackendGateway | null = null
   let stopProjection: (() => void) | null = null
   let currentWorkspaceId = ''
+  // Monotonic epoch, bumped on every attach/detach. A slow `loadRuns` /
+  // `loadMoreHistory` from a previous Workspace (or a previous attach of the
+  // same one) must not clobber the fresh attach's `loading` / `error` /
+  // `connected` flags when it resolves last — the same stale-response guard
+  // selection.ts and backendConnection's targetEpoch use. The repository
+  // dedupes identical in-flight queries but does not order distinct ones.
+  let loadEpoch = 0
 
   const runningCount = computed(() =>
     Array.from(active.value.values()).filter((run) => run.status === 'RUNNING').length,
@@ -57,6 +64,7 @@ export const useRunsStore = defineStore('runs', () => {
 
   function init(workspaceId: string) {
     teardown()
+    loadEpoch++
     // One assembly point owns which client, which actor, and the shared
     // subscription multiplexer -- this store just takes what it is given.
     const infrastructure = studioInfrastructure()
@@ -68,6 +76,7 @@ export const useRunsStore = defineStore('runs', () => {
   }
 
   function teardown() {
+    loadEpoch++
     stopProjection?.()
     stopProjection = null
     repository = null
@@ -80,7 +89,11 @@ export const useRunsStore = defineStore('runs', () => {
   async function loadRuns(workspaceId = currentWorkspaceId) {
     if (!useSettingsStore().backendConnected) return
     if (!repository) return
+    const epoch = loadEpoch
     await withLoading(() => repository!.load({ workspaceId: workspaceId || undefined, offset: 0, limit: PAGE_SIZE }))
+    // A load for a Workspace this store has since detached from must not
+    // flip `connected` for the current attach.
+    if (epoch !== loadEpoch || workspaceId !== currentWorkspaceId) return
     connected.value = !error.value
   }
 
@@ -211,11 +224,12 @@ export const useRunsStore = defineStore('runs', () => {
   }
 
   async function withLoading(operation: () => Promise<unknown>) {
+    const epoch = loadEpoch
     loading.value = true
     error.value = null
     try { await operation() }
-    catch (cause) { error.value = message(cause) }
-    finally { loading.value = false }
+    catch (cause) { if (epoch === loadEpoch) error.value = message(cause) }
+    finally { if (epoch === loadEpoch) loading.value = false }
   }
 
   function applySnapshot(snapshot: RunRepositorySnapshot) {

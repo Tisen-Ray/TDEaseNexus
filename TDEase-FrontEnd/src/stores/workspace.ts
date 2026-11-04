@@ -228,8 +228,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   // FRONTEND-ZERO: file tree is loaded from local filesystem.
+  // Monotonic epoch for `loadFileTree`: two rapid directory switches can let
+  // the slower `listDir` resolve last and overwrite the newer tree (and drop
+  // the newer load's error state). Only the latest invocation may write
+  // `fileTree` / `loading` / `error` — same guard shape as selection.ts's
+  // stale-response checks.
+  let fileTreeEpoch = 0
   async function loadFileTree() {
     if (!workspacePath.value) return
+    const epoch = ++fileTreeEpoch
     loading.value = true
     error.value = null
     try {
@@ -253,12 +260,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         loaded: !entry.isDir,
       }))
       log.debug('built tree with', nodes.length, 'root nodes')
+      if (epoch !== fileTreeEpoch) return
       fileTree.value = nodes
     } catch (err) {
+      if (epoch !== fileTreeEpoch) return
       error.value = err instanceof Error ? err.message : 'Failed to load file tree'
       log.error('loadFileTree failed', err)
     } finally {
-      loading.value = false
+      if (epoch === fileTreeEpoch) loading.value = false
     }
   }
 
