@@ -60,7 +60,7 @@
     "d3": "^7.9.0",
     "dagre": "^0.8.5",
     "electron-updater": "^6.8.9",
-    "element-plus": "^2.11.8",
+    "element-plus": "2.11.8",
     "exceljs": "^4.4.0",
     "katex": "^0.18.1",
     "koffi": "^3.3.0",
