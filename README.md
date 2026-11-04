@@ -1,134 +1,80 @@
-# TDEaseNexus · TD通
+<p align="center">
+  <img src="assets/logo.png" width="128" alt="TDEaseNexus logo">
+</p>
 
-AI-first top-down mass spectrometry (TD-MS) analysis desktop workbench. A researcher
-states an analysis goal; the built-in agent selects templates and managed capabilities,
-runs the native workflow (MSConvert → TopFD → TopPIC), supervises execution, and helps
-inspect results — with every intermediate result stored, re-readable, and cross-checkable.
+<h1 align="center">TDEaseNexus</h1>
 
-Calm, precise, forgiving: quiet during routine work, explicit when decisions or failures
-need attention. It refuses to be a node-editor, a parameter-wizard maze, a card-grid
-dashboard, or opaque AI.
+<p align="center"><em>AI-first desktop workbench for top-down mass spectrometry.</em></p>
 
-**Status: `0.11.0-beta`** ([changelog](CHANGELOG.md)) · License: GPL-3.0-or-later
+<p align="center">
+  <img alt="version" src="https://img.shields.io/badge/version-0.11.0--beta-orange">
+  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
+  <img alt="license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue">
+</p>
 
-## Download
+State a proteoform analysis goal on the Agent page. The agent picks a workflow
+template, runs the native pipeline (MSConvert → TopFD → TopPIC), supervises
+execution, and keeps every intermediate result stored, re-readable, and
+cross-checkable.
 
-Prebuilt installers for v0.11.0-beta are published at
-[TDEaseNexus-Releases](https://github.com/Tisen-Ray/TDEaseNexus-Releases/releases):
+## Install
 
-- **Windows** — NSIS installer (`.exe`), per-user install.
-- **Linux** — AppImage (`.AppImage` + `.sha256` checksum).
+**[Download the latest release ↗](https://github.com/Tisen-Ray/TDEaseNexus-Releases/releases/latest)** —
+Windows x64 (NSIS, per-user). A Linux AppImage can be built from source with
+`scripts/release/build-desktop-linux.sh`.
 
-The installer bundles the Python runtime and fetches third-party workflow binaries
-(TopPIC Suite, ProteoWizard, Informed-Proteomics) on demand. It ships **no model
-provider API key** — see Getting started below.
+The installer bundles the compute-node catalog (TopPIC, MSConvert,
+Informed-Proteomics, TopIndex, PRIDE); the first launch unpacks it and builds the
+backend Python environment, which takes a few minutes. No model provider key ships
+with the app — add your own under **Settings → Model providers**; keys are stored
+encrypted locally.
 
-## Getting started
+## Build from source
 
-1. Download the installer for your platform from the
-   [releases page](https://github.com/Tisen-Ray/TDEaseNexus-Releases/releases)
-   (Windows: run the installer; Linux: `chmod +x` the AppImage and run it).
-2. Launch TDEaseNexus and open **Settings → model providers** to configure your
-   own provider endpoint and API key. Keys are stored encrypted by the desktop
-   (no plaintext fallback); nothing is bundled or sent anywhere but the endpoint
-   you configure.
-3. State an analysis goal on the Agent page — the agent assembles the workflow,
-   asks before risky steps, and keeps every intermediate result inspectable.
-
-## Building from source
-
-Prerequisites: Node `>=24.12 <25` + pnpm 10, Python 3.11+ with
-[uv](https://docs.astral.sh/uv/), Rust >= 1.97.
+Requires Node ≥24.12 + pnpm 10, Python ≥3.11 with [uv](https://docs.astral.sh/uv/),
+and Rust ≥1.97.
 
 ```bash
 git clone --recurse-submodules https://github.com/Tisen-Ray/TDEaseNexus.git
-cd TDEaseNexus
-
-# Frontend (TDEase-FrontEnd/)
+cd TDEaseNexus/TDEase-FrontEnd
 pnpm install
-pnpm dev            # vite dev server
-pnpm build          # typecheck + gates + production build
-pnpm test:run       # vitest
-# e2e only: pnpm exec playwright install
+pnpm desktop:dev      # Electron + Vite dev loop
+pnpm build            # typecheck + gates + production build
+pnpm test:run         # unit tests
 
-# Backend (tdease-backend/)
-uv sync
-
-# Root contract/E2E suite (repo root; runs under the backend project env)
-uv run --project tdease-backend pytest tests/
-
-# Rust kernel (tdease-ai-capability/rust/)
-cargo test
-
-# one-time: enable the zero-dependency pre-commit gate
-git config core.hooksPath githooks
+cd ../tdease-backend && uv sync
+cd .. && uv run --project tdease-backend pytest tests/   # root contract/E2E suite
+cd tdease-ai-capability/rust && cargo test               # Rust kernel
 ```
 
-Release artifacts are built by `scripts/release/` (`build-desktop.ps1` for the
-Windows NSIS installer, `build-desktop-linux.sh` for the AppImage).
+Both submodules are required. If you cloned without `--recurse-submodules`, run
+`git submodule update --init --recursive`.
 
-## Repository layout
-
-Three independent products, one dependency direction:
+## Architecture
 
 ```text
-TDEaseNexus/
-├─ TDEase-FrontEnd/        Desktop UI, Electron host, Agent experience (this repo)
-├─ tdease-backend/         Submodule: Python/FastAPI service, Snakemake engine
-├─ tdease-ai-capability/   Submodule: Rust scientific kernel + domain Skills + prompts
-├─ data/                   Local development runtime data (simulated client install)
-├─ docs/                   Product contracts (spec/), designs, current status
-└─ tests/                  Root contract/E2E suite (backend + skills)
+TDEase-FrontEnd ──→ tdease-backend ──→ tdease-ai-capability
+        └────────────────────────────────────────────↗
 ```
 
-```text
-Desktop -> Backend -> Scientific System
-Desktop ------------> Scientific System
-```
-
-- Desktop owns UX, sessions, permissions, visualization, process supervision.
-- Backend owns Run lifecycle, execution, storage, synchronization, server policy.
-- Scientific System owns Skills, scientific assets, and Rust computation
-  (`tdeasenexus-toolbox`).
-
-The two submodules are required; a plain `git clone` without
-`--recurse-submodules` will not build. Run `git submodule update --init
---recursive` if you already cloned.
+- **Desktop** (`TDEase-FrontEnd/`) — Electron shell + Vue 3 UI. Owns the agent
+  experience, visualization, permissions, and process supervision.
+- **Backend** (`tdease-backend/`, submodule) — Python/FastAPI. Owns Run lifecycle,
+  Snakemake execution, storage, and server policy.
+- **Scientific system** (`tdease-ai-capability/`, submodule) — Rust
+  `tdeasenexus-toolbox` CLI, skills, prompts, and reference data.
 
 ## Documentation
 
-Authoritative order lives in [docs/README.md](docs/README.md): iron rules
-([AGENTS.md](AGENTS.md)) → accepted contracts (`docs/spec/`) → designs (`docs/design/`)
-→ [docs/STATUS.md](docs/STATUS.md) (what is implemented today). Agent tool surface:
-`docs/spec/AGENT-CONTRACT.md`; Run lifecycle: `docs/spec/WORKFLOW-RUN.md`; Rust CLI
-contract: `docs/spec/RUST-MS-CONTRACT.md`.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). In short: development happens on `main`,
-end-to-end evidence beats unit tests, and documentation is written only when asked for.
-
-## Citing
-
-If you use TDEaseNexus, please cite this repository (see
-[CITATION.cff](CITATION.cff)) and the companion manuscript. Versioned software DOI
-(Zenodo–GitHub integration) and data-repository DOIs (frozen reproduction package and
-certified agent-session trajectories) will be added here upon deposit.
+| Topic | Document |
+|---|---|
+| What works today | [docs/STATUS.md](docs/STATUS.md) |
+| Run lifecycle and HTTP API | [docs/spec/WORKFLOW-RUN.md](docs/spec/WORKFLOW-RUN.md) |
+| Agent tools and permissions | [docs/spec/AGENT-CONTRACT.md](docs/spec/AGENT-CONTRACT.md) |
+| Architecture and failure model | [docs/design/CORE-ARCHITECTURE.md](docs/design/CORE-ARCHITECTURE.md) |
+| Release history | [CHANGELOG.md](CHANGELOG.md) |
 
 ## License
 
-Licensed under the [GNU General Public License v3.0](LICENSE) or later
-(GPL-3.0-or-later), matching all three repositories.
-
-## 中文说明
-
-TDEaseNexus · TD通 是一个 AI 优先的自上而下质谱（TD-MS）分析桌面工作台：研究者陈述
-分析目标，内置智能体选择模板与受管能力，驱动原生流程（MSConvert → TopFD → TopPIC），
-监督执行，并协助检查结果——所有中间结果均可存储、回读与交叉验证。
-
-- 下载安装包（Windows 安装程序 / Linux AppImage，当前版本 `0.11.0-beta`）：
-  [Releases](https://github.com/Tisen-Ray/TDEaseNexus-Releases/releases)
-- 首次使用：安装后在 **设置 → 模型服务** 中配置你自己的服务商接口与 API 密钥
-  （应用不内置任何密钥，密钥在本机加密存储）。
-- 许可证：GPL-3.0-or-later。文档目前为英文；[CHANGELOG](CHANGELOG.md) 与
-  [docs/STATUS.md](docs/STATUS.md) 记录当前实现状态。
+GPL-3.0-or-later — see [LICENSE](LICENSE). Citation metadata in
+[CITATION.cff](CITATION.cff); contribution rules in [CONTRIBUTING.md](CONTRIBUTING.md).
