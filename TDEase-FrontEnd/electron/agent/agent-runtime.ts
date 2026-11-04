@@ -416,6 +416,13 @@ export class AgentRuntime {
           drainSettledRuns: () => studio.runs.drainSettledRuns(),
           hasActiveSubagents: () => subagents?.list().some((record) => record.state === 'running') ?? false,
           readWorkspaceBytes: (relative) => workspace.readBytes(workspaceRoot, relative),
+          workspaceFileSize: async (relative) => {
+            try {
+              return await workspace.fileSize(workspaceRoot, relative)
+            } catch {
+              return null
+            }
+          },
           emitContextUsage: (sessionId, usage) => {
             if (this.generations.get(binding.sessionId) === binding.generation) {
               this.options.push.contextUsage?.(sessionId, usage)

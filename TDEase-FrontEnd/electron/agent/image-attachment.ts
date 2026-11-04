@@ -104,6 +104,11 @@ export interface ResolvePromptImagesInput {
   /** Read a workspace-relative file as raw bytes. Must be containment-checked
    * by the caller's bridge. Absent when the host has no workspace bridge. */
   readBytes?: (relative: string) => Promise<Uint8Array>
+  /** Stat a workspace-relative file (bytes), null when unavailable. When
+   * present, an oversized file is skipped BEFORE readBytes runs — a marker
+   * can point at a multi-GB file, and reading it whole just to discard it at
+   * the cap is exactly the unbounded read the cap exists to prevent. */
+  sizeOf?: (relative: string) => Promise<number | null>
   capBytes?: number
 }
 
@@ -140,6 +145,13 @@ export async function resolvePromptImages(
     if (seen.has(marker.path)) continue
     seen.add(marker.path)
     try {
+      // Size pre-check (fstat) first: the cap must gate the READ, not just
+      // the injection — otherwise an oversized file is fully loaded into
+      // memory before being discarded.
+      if (input.sizeOf) {
+        const size = await input.sizeOf(marker.path)
+        if (size !== null && size > cap) continue
+      }
       const bytes = await input.readBytes(marker.path)
       if (bytes.byteLength > cap) continue
       images.push({

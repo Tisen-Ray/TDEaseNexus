@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
@@ -249,6 +250,12 @@ export class SessionHost {
     } catch (error) {
       this.resumeError = error instanceof Error ? error.message : String(error)
       this.resumed = false
+      // Quarantine, don't overwrite: the unreadable transcript stays on disk
+      // (renamed aside, the corrupt-run.json discipline) instead of being
+      // left in place — a corrupt model-session/ left where it is would trip
+      // every future bind into this same silent fresh-start, and a fresh
+      // session written into the same dir would bury the evidence.
+      this.quarantineCorruptTranscript()
       sessionManager = SessionManager.create(this.options.binding.workspaceRoot, this.options.store.modelSessionDir(this.options.binding.sessionId))
     }
 
@@ -401,6 +408,7 @@ export class SessionHost {
         message,
         supportsImages: this.supportsImages,
         readBytes: (relative) => this.options.ambient.readWorkspaceBytes(relative),
+        sizeOf: async (relative) => await this.options.ambient.workspaceFileSize?.(relative) ?? null,
       })
       await session.prompt(message, images && images.length > 0 ? { images } : undefined)
       // Pi may resolve prompt() normally after abort instead of throwing. The
@@ -493,6 +501,28 @@ export class SessionHost {
     this.scheduleContextUsage(true)
     this.options.sink.turnTerminal(this.options.binding.sessionId, turnId, outcome, usage)
     return { ok: true, generation: this.options.binding.generation, turnId, outcome, usage }
+  }
+
+  /**
+   * Move an unreadable Pi transcript aside as `model-session.corrupt-<ts>/`
+   * and recreate the empty dir, so the fresh start that follows cannot bury
+   * the corrupt original (kept for diagnosis) and the next bind does not trip
+   * over it again. Best-effort: a rename failure must not block the fresh
+   * start — it only means the old files stay in place.
+   */
+  private quarantineCorruptTranscript(): void {
+    const dir = this.options.store.modelSessionDir(this.options.binding.sessionId)
+    try {
+      renameSync(dir, `${dir}.corrupt-${Date.now()}`)
+    } catch (error) {
+      console.warn('[session-host] corrupt transcript quarantine failed', error)
+      return
+    }
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch (error) {
+      console.warn('[session-host] transcript dir recreation failed', error)
+    }
   }
 
   async abort(): Promise<void> {

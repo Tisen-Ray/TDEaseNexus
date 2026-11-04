@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { SessionHost } from './session-host'
 
@@ -33,6 +37,7 @@ const nativeModel = {
 const state = vi.hoisted(() => ({
   registered: [] as Array<{ id: string; config: { baseUrl?: string; models: Array<{ baseUrl?: string }> } }>,
   runtimeModel: undefined as { baseUrl: string } | undefined,
+  continueRecentThrows: false as boolean,
 }))
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
@@ -44,7 +49,10 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   },
   SessionManager: {
     create: () => ({}),
-    continueRecent: () => ({}),
+    continueRecent: () => {
+      if (state.continueRecentThrows) throw new Error('corrupt transcript tail')
+      return {}
+    },
   },
   SettingsManager: {
     inMemory: () => ({}),
@@ -63,7 +71,11 @@ const mockRuntime = {
   },
 }
 
-function makeHost(options: { providerBaseUrl: string }) {
+function makeHost(options: {
+  providerBaseUrl: string
+  modelSessionDir?: string
+  hasTranscript?: boolean
+}) {
   return new SessionHost({
     binding: {
       workspaceId: 'workspace',
@@ -90,8 +102,8 @@ function makeHost(options: { providerBaseUrl: string }) {
     } as never,
     store: {
       ensureSessionDirs: () => undefined,
-      hasTranscript: () => false,
-      modelSessionDir: () => '/tmp/sessions',
+      hasTranscript: () => options.hasTranscript ?? false,
+      modelSessionDir: () => options.modelSessionDir ?? '/tmp/sessions',
     } as never,
     prompt: { resolveReferences: async () => [], assembleForRun: async () => ({ systemPrompt: '', digest: '', fragments: [] }), snapshotProviderRequest: vi.fn() } as never,
     approvals: { request: vi.fn(), resolve: vi.fn(), cancelSession: vi.fn() } as never,
@@ -117,6 +129,7 @@ afterEach(() => {
   state.runtimeModel = undefined
   state.registered.length = 0
   state.runtimeModel = undefined
+  state.continueRecentThrows = false
 })
 
 describe('SessionHost provider bind endpoint contract', () => {
@@ -146,5 +159,35 @@ describe('SessionHost provider bind endpoint contract', () => {
     expect(state.registered).toHaveLength(1)
     expect(state.registered[0].config.baseUrl).toBe('http://127.0.0.1:9100/v1')
     expect(bound.ok).toBe(true)
+  })
+})
+
+describe('SessionHost resume quarantine (corrupt transcript)', () => {
+  it('quarantines the unreadable transcript dir aside and still binds fresh', async () => {
+    state.runtimeModel = { ...nativeModel, baseUrl: 'https://api.deepseek.com' }
+    state.continueRecentThrows = true
+    const tmp = await mkdtemp(join(tmpdir(), 'tdease-quarantine-'))
+    try {
+      const dir = join(tmp, 'model-session')
+      mkdirSync(dir)
+      await writeFile(join(dir, 'transcript.jsonl'), '{"torn')
+      const host = makeHost({
+        providerBaseUrl: 'https://api.deepseek.com',
+        modelSessionDir: dir,
+        hasTranscript: true,
+      })
+      const bound = await host.initialize()
+      expect(bound.ok).toBe(true)
+      expect(bound.resumed).toBe(false)
+      expect(bound.resumeError).toContain('corrupt transcript tail')
+      // The torn original survived, renamed aside; the live dir is fresh.
+      const entries = readdirSync(tmp)
+      const quarantined = entries.find((name) => name.startsWith('model-session.corrupt-'))
+      expect(quarantined).toBeDefined()
+      expect(readFileSync(join(tmp, quarantined!, 'transcript.jsonl'), 'utf8')).toBe('{"torn')
+      expect(readdirSync(dir)).toEqual([])
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
   })
 })

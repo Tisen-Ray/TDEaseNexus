@@ -328,6 +328,10 @@ export interface TurnAmbient {
   /** Read a workspace-relative file as raw bytes for `[attached_image: path]`
    *  markers. Containment-checked by the supplying bridge. */
   readWorkspaceBytes(relative: string): Promise<Uint8Array>
+  /** Stat a workspace-relative file (bytes) for the image-attachment size
+   * pre-check; null when the size is unavailable (the post-read cap still
+   * applies). Containment-checked by the supplying bridge. */
+  workspaceFileSize?(relative: string): Promise<number | null>
   /** Push live context occupancy to the renderer — a read-side channel,
    *  never a turn event. */
   emitContextUsage(sessionId: string, usage: import('../../src/contracts/agent-runtime').ContextUsageSnapshot): void

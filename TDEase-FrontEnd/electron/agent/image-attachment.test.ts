@@ -128,6 +128,35 @@ describe('resolvePromptImages', () => {
     ])
   })
 
+  it('skips an oversized file via the size pre-check without reading it', async () => {
+    const readBytes = vi.fn(async () => new Uint8Array([1]))
+    const sizeOf = vi.fn(async () => 11 * 1024 * 1024)
+    const result = await resolvePromptImages({
+      message: '[attached_image: big.png]',
+      supportsImages: true,
+      readBytes,
+      sizeOf,
+      capBytes: 10 * 1024 * 1024,
+    })
+    expect(result).toBeUndefined()
+    expect(sizeOf).toHaveBeenCalledWith('big.png')
+    expect(readBytes).not.toHaveBeenCalled()
+  })
+
+  it('reads when the size pre-check reports a size within the cap', async () => {
+    const bytes = new Uint8Array([1, 2])
+    const readBytes = vi.fn(async () => bytes)
+    const result = await resolvePromptImages({
+      message: '[attached_image: ok.png]',
+      supportsImages: true,
+      readBytes,
+      sizeOf: async () => 2,
+      capBytes: 4,
+    })
+    expect(result?.length).toBe(1)
+    expect(readBytes).toHaveBeenCalledTimes(1)
+  })
+
   it('deduplicates the same path', async () => {
     const readBytes = vi.fn(async () => new Uint8Array([1]))
     const result = await resolvePromptImages({
