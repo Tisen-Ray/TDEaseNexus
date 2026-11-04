@@ -72,12 +72,21 @@ if [ "$SKIP_SYNC" -ne 1 ]; then
         --exclude='TDEase-FrontEnd/dist-electron' \
         --exclude='__pycache__' \
         --exclude='.venv' \
+        --exclude='docs/paper' \
+        --exclude='.zcode' \
+        --exclude='tdease-backend/.zcode' \
         . | vm "tar -xzf - -C \"${VM_REPO}\""
 
     echo "--- sync node catalog definitions + licensed binaries ---"
     tar -C "$REPO/data/backend" -czf - nodes | vm "tar -xzf - -C \"${VM_REPO}/data/backend\""
-    vm "if exist \"${VM_REPO}/data/backend/nodes/msconvert\" rmdir /s /q \"${VM_REPO}/data/backend/nodes/msconvert\""
-    vm "if exist \"${VM_REPO}/data/backend/nodes/toppic\" rmdir /s /q \"${VM_REPO}/data/backend/nodes/toppic\""
+    # The licensed Windows payloads (pwiz, toppic) are binary-only drops: they
+    # carry exes/dlls/resources but NOT the definition layer (rules.smk,
+    # README.md). Replace each payload node's CONTENT while preserving its
+    # definitions — a whole-dir rmdir would destroy rules.smk and the build's
+    # Phase 0.6 prerequisite check with it.
+    for node in msconvert toppic; do
+        vm "pwsh -NoProfile -Command \"Get-ChildItem -LiteralPath '${VM_REPO}/data/backend/nodes/${node}' | Where-Object { \$_.Name -notin @('rules.smk','README.md') } | Remove-Item -Recurse -Force\""
+    done
     tar -C "$PWIZ_DIR" -czf - . | vm "tar -xzf - -C \"${VM_REPO}/data/backend/nodes/msconvert\""
     tar -C "$TOPPIC_DIR" -czf - . | vm "tar -xzf - -C \"${VM_REPO}/data/backend/nodes/toppic\""
 fi

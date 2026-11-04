@@ -84,3 +84,18 @@ if ($existing.Count -eq 0) {
 }
 
 Write-Output "Provisioning complete. Next: scripts/release/test-vm-preflight.ps1"
+
+# ── 4. non-secret provider seed ─────────────────────────────────────────────
+# The preflight requires settings.seed.json BEFORE build-desktop.ps1 runs, and
+# build-desktop Phase -1 rewrites it anyway (same content, plus an optional
+# sealed key from TDEASE_DEEPSEEK_API_KEY) — so pre-write it here to break the
+# chicken-and-egg between preflight and build. Idempotent.
+$seedPath = Join-Path $runtime "settings.seed.json"
+$seed = @{ providers = @{ deepseek = @{ base_url = "https://api.deepseek.com/v1" } } }
+Set-Content -LiteralPath $seedPath -Value ($seed | ConvertTo-Json -Depth 6) -Encoding utf8
+Write-Output "  non-secret provider seed written -> $seedPath"
+
+# ── 5. MinGit (bundled bash for the agent sandbox) ──────────────────────────
+# The preflight requires the staged tree before build-desktop runs; the build
+# calls the same idempotent script (Phase 0.5), so both see one implementation.
+& pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "vendor-git.ps1") -RepoRoot $repo
