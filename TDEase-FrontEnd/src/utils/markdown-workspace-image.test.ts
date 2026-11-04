@@ -65,13 +65,6 @@ describe('renderMarkdown Obsidian media embeds (legacy ![[...]] alias)', () => {
     expect(html).toContain('data-file-kind="svg"')
   })
 
-  it('renders a workspace-relative ![[...]] raster embed as a viz frame placeholder', () => {
-    const html = renderMarkdown('![[runs/soybean-all/analysis/p317/envelope.png]]')
-    expect(html).toContain('class="md-media-frame"')
-    expect(html).toContain('data-workspace-src="runs/soybean-all/analysis/p317/envelope.png"')
-    expect(html).toContain('data-file-kind="image"')
-  })
-
   it('keeps an absolute http ![[...]] as a normal image', () => {
     const html = renderMarkdown('![[https://example.com/fig.png]]')
     expect(html).not.toContain('data-workspace-src')

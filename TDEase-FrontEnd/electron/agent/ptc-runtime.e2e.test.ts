@@ -2,13 +2,14 @@ import path from 'node:path'
 import os from 'node:os'
 import { promises as fs } from 'node:fs'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it } from 'vitest'
 
 import { createPtcPort } from './ptc-runtime'
 import { createToolCallGate } from './tool-call-gate'
 import { createToolGateway } from './tool-gateway'
 import { NodePermissionGateway } from './permission-gateway'
 import { PtyTerminalService } from './pty-terminal'
+import { describePty } from './pty-skip'
 import { deepFreeze, type SessionBinding } from './turn-definition'
 import type { Observers } from './contracts'
 import type { ApprovalCoordinator } from './contracts'
@@ -114,7 +115,7 @@ function rig(root: string, shellExec: 'allow' | 'deny' | 'ask' = 'allow') {
   return { port, audit, binding, dispose: () => terminals.disposeAll() }
 }
 
-describe('PtcRuntime E2E on the real tool chain', () => {
+describePty('PtcRuntime E2E on the real tool chain', () => {
   let root: string
   let dispose: () => Promise<void> | undefined
   beforeEach(async () => {

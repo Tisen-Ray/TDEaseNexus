@@ -2,11 +2,12 @@ import path from 'node:path'
 import os from 'node:os'
 import { promises as fs } from 'node:fs'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it } from 'vitest'
 
 import { createToolGateway } from './tool-gateway'
 import { NodePermissionGateway } from './permission-gateway'
 import { PtyTerminalService } from './pty-terminal'
+import { describePty } from './pty-skip'
 import { deepFreeze, type SessionBinding } from './turn-definition'
 import type { CommandContext } from '../../src/studio/commands/registry'
 import type { StudioRuntime } from '../../src/studio/runtime/studio-runtime'
@@ -61,7 +62,7 @@ interface BashTool {
   }>
 }
 
-describe('Persistent PTY bash (dsh-tool-bash-persistent port)', () => {
+describePty('Persistent PTY bash (dsh-tool-bash-persistent port)', () => {
   let root: string
   let terminals: PtyTerminalService
   let bash: BashTool

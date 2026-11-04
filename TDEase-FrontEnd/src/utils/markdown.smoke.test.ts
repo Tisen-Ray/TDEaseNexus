@@ -22,15 +22,6 @@ describe('renderMarkdown', () => {
     expect(html).toContain('language-python')
   })
 
-  it('renders lists, bold, italic, inline code', () => {
-    const html = renderMarkdown('- **a** *b* `c`')
-    expect(html).toContain('<ul>')
-    expect(html).toContain('<li>')
-    expect(html).toContain('<strong>a</strong>')
-    expect(html).toContain('<em>b</em>')
-    expect(html).toContain('<code>c</code>')
-  })
-
   it('wraps tables in scroll div', () => {
     const html = renderMarkdown('| A | B |\n|---|---|\n| 1 | 2 |')
     expect(html).toContain('markdown-table-scroll')

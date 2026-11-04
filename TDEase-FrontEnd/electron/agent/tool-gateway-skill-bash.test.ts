@@ -2,6 +2,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
@@ -9,6 +10,7 @@ import { createToolGateway } from './tool-gateway'
 import { createProducedPathLedger } from './tool-call-gate'
 import { NodePermissionGateway } from './permission-gateway'
 import { PtyTerminalService } from './pty-terminal'
+import { describePty } from './pty-skip'
 import { deepFreeze, type SessionBinding } from './turn-definition'
 import type { CommandContext } from '../../src/studio/commands/registry'
 import type { StudioRuntime } from '../../src/studio/runtime/studio-runtime'
@@ -69,7 +71,27 @@ async function runBash(tools: unknown[], command: string, cwd: string): Promise<
   return bashTool.execute('call-skill', { command, cwd })
 }
 
-describe('ToolGateway Skill-via-bash', () => {
+/**
+ * Resolve uv the way the root contract suite does (shutil.which("uv") or
+ * ~/.local/bin/uv): a dev shell whose PATH lacks ~/.local/bin must still find
+ * the interpreter; a machine with no uv at all skips the one test that
+ * executes it (the env-contract tests below cover the same spawnHook seam
+ * without running uv).
+ */
+function resolveUv(): string | null {
+  try {
+    const hit = execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', ['uv'], { encoding: 'utf8' })
+      .split(/\r?\n/)[0]!.trim()
+    return hit || null
+  } catch {
+    const fallback = path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'uv.exe' : 'uv')
+    return existsSync(fallback) ? fallback : null
+  }
+}
+
+const uvPath = resolveUv()
+
+describePty('ToolGateway Skill-via-bash', () => {
   let root: string
   let terminals: PtyTerminalService
   beforeEach(async () => {
@@ -81,10 +103,8 @@ describe('ToolGateway Skill-via-bash', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('runs System and Workspace Skill scripts with uv isolated from the host PATH', async () => {
-    const uv = execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', ['uv'], { encoding: 'utf8' })
-      .split(/\r?\n/)[0]
-      .trim()
+  ;(uvPath ? it : it.skip)('runs System and Workspace Skill scripts with uv isolated from the host PATH', async () => {
+    const uv = uvPath!
     const assets = path.join(root, 'system-assets')
     const systemScript = path.join(assets, 'skills', 'probe', 'scripts', 'run.py')
     const workspaceScript = path.join(root, '.tdease', 'skills', 'probe', 'scripts', 'run.py')
@@ -147,7 +167,7 @@ describe('ToolGateway Skill-via-bash', () => {
  * replaced the spawn env with bashEnv rather than merging one var. No uv
  * execution is needed to assert the env contract.
  */
-describe('ToolGateway bash spawnHook injects the full skill runtime env', () => {
+describePty('ToolGateway bash spawnHook injects the full skill runtime env', () => {
   it('replaces spawn env with bashEnv carrying the bundled runtime markers', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tdease-bashenv-'))
     const terminals = new PtyTerminalService()
@@ -207,7 +227,7 @@ describe('ToolGateway bash spawnHook injects the full skill runtime env', () => 
  * `tdeasenexus-toolbox` resolves inside the sandbox with no absolute path and no
  * `TDEASENEXUS_TOOLBOX_BIN`-style env pointer.
  */
-describe('ToolGateway bash resolves the tdeasenexus-toolbox short name from the managed bin dir', () => {
+describePty('ToolGateway bash resolves the tdeasenexus-toolbox short name from the managed bin dir', () => {
   it('runs `tdeasenexus-toolbox` from managedBinDir with no absolute path', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tdease-shortname-'))
     const terminals = new PtyTerminalService()
@@ -245,7 +265,13 @@ describe('ToolGateway bash resolves the tdeasenexus-toolbox short name from the 
       await fs.rm(root, { recursive: true, force: true })
     }
   }, 60_000)
+})
 
+/**
+ * The deny path throws at the gate BEFORE any PTY is spawned, so it runs
+ * even where no pseudo-terminal can be allocated — kept out of describePty.
+ */
+describe('ToolGateway bash permission gate', () => {
   it('refuses bash execution when the shell.exec permission is denied', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tdease-deny-'))
     const terminals = new PtyTerminalService()
